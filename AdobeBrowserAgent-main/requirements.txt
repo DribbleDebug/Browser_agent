@@ -1,0 +1,5 @@
+playwright>=1.42.0
+gradio>=4.19.2
+pillow>=10.2.0
+requests>=2.31.0
+together>=0.2.11
