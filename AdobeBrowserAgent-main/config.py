@@ -1,4 +1,6 @@
-"""Configuration settings for the web agent."""
+"""
+Configuration settings for the Web Agent.
+"""
 
 import os
 import logging
@@ -7,8 +9,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Together.ai Configuration
-TOGETHER_API_KEY = "tgp_v1_2sOLORmNOYRP6CFcpVtamEyyqI27MAA0k27Ehnzka9c"  # Replace with your actual Together.ai API key
+# Together.ai API settings
+TOGETHER_API_KEY = "tgp_v1_90IItRNdPY_x27F1VC8c-PUUFvnR5CiwCv4ukbvDszk"  # Add your Together.ai API key here
 
 if not TOGETHER_API_KEY:
     raise ValueError(
@@ -16,16 +18,21 @@ if not TOGETHER_API_KEY:
     )
 
 # Model configuration
-DEFAULT_CHAT_MODEL = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
-DEFAULT_VISION_MODEL = "meta-llama/llama-vision-free"
+DEFAULT_CHAT_MODEL = "togethercomputer/llama-2-70b-chat"
+DEFAULT_VISION_MODEL = "togethercomputer/llama-2-70b-chat"
+
+# Browser settings
+DEFAULT_HEADLESS = False
+DEFAULT_MAX_TOKENS = 1000
+
+# Logging settings
+DEBUG = True
 
 # Agent configuration
 DEFAULT_TEMPERATURE = 0.7
-DEFAULT_MAX_TOKENS = 1024
 DEFAULT_STREAM = True
 
 # Web agent configuration
-DEFAULT_HEADLESS = False
 DEFAULT_TIMEOUT = 30000  # milliseconds
 MAX_RETRIES = 3
 WAIT_TIME = 2  # seconds
