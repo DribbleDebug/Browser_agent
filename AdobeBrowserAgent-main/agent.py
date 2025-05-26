@@ -167,15 +167,83 @@ class WebPerceptionAgent:
                         break
                 
                 if search_terms:
-                    return {
-                        "action": "search",
+                    # First type the search terms
+                    type_action = {
+                        "action": "type",
+                        "selector": """
+                            input[type='text'],
+                            input[type='search'],
+                            input[name='q'],
+                            input[name='search'],
+                            input[placeholder*='search' i],
+                            .search-input,
+                            input:not([type='submit']):not([type='button']):not([type='hidden'])
+                        """,
                         "text": search_terms  # Use original case
-                    }, "Performing search"
+                    }
+                    
+                    # Then click search button or press Enter
+                    click_action = {
+                        "action": "click",
+                        "selector": """
+                            button[type='submit'],
+                            input[type='submit'],
+                            button.search-button,
+                            .searchButton,
+                            [aria-label*='search' i],
+                            button:has(svg),
+                            [type='submit']",
+                            button:text-is('Search'),
+                            button:text-matches('Search', 'i'),
+                            button.btn-search",
+                            ".search-submit",
+                            #search-button,
+                            "[data-testid*='search'],
+                            button[name*='search']",
+                            button[id*='search'],
+                            button:has-text('Search'),
+                            button:has-text('Go'),
+                            button:has-text('Submit'),
+                            button.btn-primary,
+                            button.btn-submit,
+                            button[aria-label*='search']",
+                            button[title*='search']",
+                            ".btn-search",
+                            ".search-icon",
+                            button:has(svg[aria-label*='search']),
+                            button:has(img[alt*='search'])"
+                        """,
+                        "expect_navigation": True
+                    }
+                    
+                    # Execute type action first
+                    type_result = self.execute_action(type_action)
+                    if "successfully" in type_result.lower():
+                        # Then try to click search button
+                        click_result = self.execute_action(click_action)
+                        if "successfully" in click_result.lower():
+                            return click_result
+                        else:
+                            # If click fails, try pressing Enter
+                            try:
+                                self.page.keyboard.press("Enter")
+                                time.sleep(2)
+                                return "Search submitted via Enter key"
+                            except:
+                                return type_result  # Return typing result if both click and Enter fail
+                    return type_result
+
+                return {"action": "search", "text": search_terms}, "Performing search"
 
             # Handle type tasks
             if "type" in task_lower:
                 # Extract text to type from original task
                 type_text = task.split("type", 1)[1].strip()  # Use original case
+                
+                # Remove any trailing commands
+                for cmd in ["then click", "then press", "and click", "and press"]:
+                    if cmd in type_text.lower():
+                        type_text = type_text.lower().split(cmd)[0].strip()
                 
                 # Check if this is a username/email field
                 if "username" in type_text.lower() or "email" in type_text.lower() or "user" in type_text.lower():
@@ -259,8 +327,55 @@ class WebPerceptionAgent:
                 # Extract text after "click"
                 click_text = task_lower.split("click", 1)[1].strip()
                 
+                # Handle search button specifically
+                if "search" in click_text.lower():
+                    return {
+                        "action": "click",
+                        "selector": """
+                            button[type='submit'],
+                            input[type='submit'],
+                            button.search-button,
+                            .searchButton,
+                            [aria-label*='search' i],
+                            button:has(svg),
+                            [type='submit'],
+                            button:text-is('Search'),
+                            button:text-matches('Search', 'i'),
+                            button.btn-search,
+                            .search-submit,
+                            #search-button,
+                            [data-testid*='search'],
+                            button[name*='search'],
+                            button[id*='search'],
+                            button:has-text('Search'),
+                            button:has-text('Go'),
+                            button:has-text('Submit'),
+                            button.btn-primary,
+                            button.btn-submit,
+                            button[aria-label*='search'],
+                            button[title*='search'],
+                            .btn-search,
+                            .search-icon,
+                            button:has(svg[aria-label*='search']),
+                            button:has(img[alt*='search']),
+                            form button[type='submit'],
+                            form input[type='submit'],
+                            /* Wikipedia specific selectors */
+                            button.cdx-search-input__end-button,
+                            .cdx-button--action-default,
+                            .cdx-search-button,
+                            [aria-label='Search'],
+                            [aria-label='Go'],
+                            .mw-searchButton,
+                            input.searchButton,
+                            #searchButton,
+                            button.mw-searchButton
+                        """,
+                        "expect_navigation": True
+                    }, "Clicking search button"
+
                 # Handle login/signin/continue/next button specifically
-                if "login" in click_text.lower() or "sign in" in click_text.lower() or "continue" in click_text.lower() or "next" in click_text.lower():
+                elif "login" in click_text.lower() or "sign in" in click_text.lower() or "continue" in click_text.lower() or "next" in click_text.lower():
                     return {
                         "action": "click",
                         "selector": """
@@ -270,10 +385,18 @@ class WebPerceptionAgent:
                             button:text-matches("Login", "i"),
                             button:text-is("Sign in"),
                             button:text-matches("Sign in", "i"),
+                            button:text-is("Log in"),
+                            button:text-matches("Log in", "i"),
+                            button:text-is("Submit"),
+                            button:text-matches("Submit", "i"),
+                            button:text-is("Continue"),
+                            button:text-matches("Continue", "i"),
+                            button:text-is("Next"),
+                            button:text-matches("Next", "i"),
                             a:text-is("Login"),
                             a:text-matches("Login", "i"),
                             a:text-is("Sign in"),
-                            a:text-matches("Sign in", "i"),
+                            a:text-is('sign in'),
                             [role='button']:text-is("Login"),
                             [role='button']:text-matches("Login", "i"),
                             [role='button']:text-is("Sign in"),
@@ -298,167 +421,24 @@ class WebPerceptionAgent:
                             button:has-text("Submit"),
                             button:has-text("Continue"),
                             button:has-text("Next"),
-                            [type='submit']
+                            [type='submit'],
+                            button.btn-primary,
+                            button.btn-submit,
+                            button.submit-button,
+                            .btn-login,
+                            .btn-signin,
+                            button[name*='login'],
+                            button[name*='signin'],
+                            button[id*='login'],
+                            button[id*='signin'],
+                            button[data-testid*='login'],
+                            button[data-testid*='signin'],
+                            button[data-testid*='submit'],
+                            button[data-testid*='continue'],
+                            button[data-testid*='next']
                         """,
                         "expect_navigation": True  # Signal that we expect navigation
                     }, "Clicking login/signin button with navigation"
-                # Handle numerical positions (e.g., "click 3rd link")
-                position_match = re.search(r'(?:link|button)?\s*(?:number|numbered|#)?\s*(\d+)(?:st|nd|rd|th)?(?:\s+(?:link|button))?|(\d+)(?:st|nd|rd|th)?\s+(?:link|button)', click_text)
-                if position_match:
-                    position = int(position_match.group(1) if position_match.group(1) else position_match.group(2))
-                    return {
-                        "action": "click",
-                        "selector": f"""
-                            a[href]:not([href='']):not([href^='#']):nth-child({position}),
-                            a[href]:not([href='']):not([href^='#']):nth-of-type({position}),
-                            a:nth-of-type({position}),
-                            button:nth-of-type({position}),
-                            [role='button']:nth-of-type({position}),
-                            [role='link']:nth-of-type({position}),
-                            .btn:nth-of-type({position}),
-                            [data-testid*='button']:nth-of-type({position}),
-                            [data-testid*='link']:nth-of-type({position}),
-                            [class*='button']:nth-of-type({position}),
-                            [class*='link']:nth-of-type({position})
-                        """
-                    }, f"Clicking element number {position}"
-                # Handle special positions (first/last)
-                elif "first" in click_text:
-                    return {
-                        "action": "click",
-                        "selector": "a[href]:not([href='']):not([href^='#']):first-child, a[href]:not([href='']):not([href^='#'])"
-                    }, "Clicking first valid link"
-                elif "last" in click_text:
-                    return {
-                        "action": "click",
-                        "selector": "a[href]:not([href='']):not([href^='#']):last-child, a[href]:not([href='']):not([href^='#']):last-of-type"
-                    }, "Clicking last valid link"
-                # Handle common button types
-                elif "login" in click_text or "sign in" in click_text:
-                    return {
-                        "action": "click",
-                        "selector": """
-                            button[type='submit'],
-                            input[type='submit'],
-                            button:text-is("Login"),
-                            button:text-matches("Login", "i"),
-                            button:text-is("Sign in"),
-                            button:text-matches("Sign in", "i"),
-                            a:text-is("Login"),
-                            a:text-matches("Login", "i"),
-                            a:text-is("Sign in"),
-                            a:text-matches("Sign in", "i"),
-                            [role='button']:text-is("Login"),
-                            [role='button']:text-matches("Login", "i"),
-                            [role='button']:text-is("Sign in"),
-                            [role='button']:text-matches("Sign in", "i"),
-                            .login-button,
-                            .signin-button,
-                            #login,
-                            #signin,
-                            button.radius,
-                            button.fa-sign-in,
-                            [class*='login'],
-                            [class*='signin'],
-                            [id*='login'],
-                            [id*='signin']
-                        """
-                    }, "Clicking login button"
-                elif "submit" in click_text:
-                    return {
-                        "action": "click",
-                        "selector": "button[type='submit'], input[type='submit'], button:contains('Submit'), .submit-button, #submit"
-                    }, "Clicking submit button"
-                elif "continue" in click_text:
-                    return {
-                        "action": "click",
-                        "selector": """
-                            button:text-is("Continue"),
-                            button:text-matches("Continue", "i"),
-                            [role='button']:text-is("Continue"),
-                            [role='button']:text-matches("Continue", "i"),
-                            input[type='submit'][value*='continue' i],
-                            .btn:text-matches("Continue", "i"),
-                            [data-testid*='continue' i],
-                            [aria-label*='continue' i],
-                            [title*='continue' i],
-                            button:text-is("Next"),
-                            button:text-matches("Next", "i"),
-                            [role='button']:text-is("Next"),
-                            [role='button']:text-matches("Next", "i"),
-                            .btn:text-matches("Next", "i"),
-                            [data-testid*='next' i],
-                            [aria-label*='next' i],
-                            [title*='next' i],
-                            button[type='submit'],
-                            input[type='submit']
-                        """
-                    }, "Clicking continue/next button"
-                else:
-                    # Try text-based clicking first (e.g., "click English" or "click on English")
-                    text_match = re.search(r'(?:on\s+)?["\']?([^"\']+)["\']?$', click_text)
-                    if text_match:
-                        click_target = text_match.group(1).strip()
-                        # Special handling for language links
-                        if click_target.lower() in ["italiano", "english", "español", "deutsch", "français", "português", "日本語", "русский", "中文", "한국어"]:
-                            return {
-                                "action": "click",
-                                "selector": f"""
-                                    a[lang="{click_target}"],
-                                    a[hreflang="{click_target}"],
-                                    #p-lang a:text-is("{click_target}"),
-                                    .interlanguage-link a:text-is("{click_target}"),
-                                    .language-link:text-is("{click_target}"),
-                                    [data-lang="{click_target}"],
-                                    a:text-is("{click_target}"),
-                                    a:text-matches("^{click_target}$", "i")
-                                """
-                            }, f"Clicking language link: {click_target}"
-                        return {
-                            "action": "click",
-                            "selector": f"""
-                                a:text-is("{click_target}"),
-                                a:text-matches("{click_target}", "i"),
-                                button:text-is("{click_target}"),
-                                button:text-matches("{click_target}", "i"),
-                                [role='button']:text-is("{click_target}"),
-                                [role='button']:text-matches("{click_target}", "i"),
-                                [role='link']:text-is("{click_target}"),
-                                [role='link']:text-matches("{click_target}", "i"),
-                                .btn:text-is("{click_target}"),
-                                .btn:text-matches("{click_target}", "i"),
-                                [data-testid*='button']:text-is("{click_target}"),
-                                [data-testid*='button']:text-matches("{click_target}", "i"),
-                                [data-testid*='link']:text-is("{click_target}"),
-                                [data-testid*='link']:text-matches("{click_target}", "i"),
-                                [aria-label*="{click_target}"],
-                                [title*="{click_target}"],
-                                a:contains('{click_target}'),
-                                button:contains('{click_target}'),
-                                [role='button']:contains('{click_target}'),
-                                input[type='submit'][value*='{click_target}'],
-                                [data-testid*='{click_target}'],
-                                [aria-label*='{click_target}'],
-                                .{click_target}-button,
-                                #{click_target}
-                            """
-                        }, f"Clicking element with text: {click_target}"
-                    
-                    # Fallback to generic click by text content
-                    click_text = click_text.strip("'\" ")
-                    return {
-                        "action": "click",
-                        "selector": f"""
-                            a:contains('{click_text}'),
-                            button:contains('{click_text}'),
-                            [role='button']:contains('{click_text}'),
-                            input[type='submit'][value*='{click_text}'],
-                            [data-testid*='{click_text}'],
-                            [aria-label*='{click_text}'],
-                            .{click_text}-button,
-                            #{click_text}
-                        """
-                    }, f"Clicking element containing '{click_text}'"
 
             # Handle scroll tasks
             if "scroll" in task_lower:
@@ -704,7 +684,7 @@ class WebPerceptionAgent:
             try:
                 # Wait for page to be ready
                 self.page.wait_for_load_state("domcontentloaded")
-                time.sleep(0.5)  # Short wait for dynamic content
+                time.sleep(1)  # Longer wait for dynamic content
 
                 # Handle direct type action with selector
                 if selector:
@@ -726,21 +706,139 @@ class WebPerceptionAgent:
                         if element:
                             # Ensure element is in view
                             element.scroll_into_view_if_needed()
-                            time.sleep(0.2)
+                            time.sleep(0.5)
                             
                             # Click to focus
                             element.click()
-                            time.sleep(0.2)
+                            time.sleep(0.5)
                             
                             # Clear existing text
                             element.fill("")
-                            time.sleep(0.2)
+                            time.sleep(0.5)
                             
-                            # Always use fill() to preserve exact case for all inputs
+                            # Type the text
                             element.fill(text)  # Use original text without case conversion
-                            time.sleep(0.2)
+                            time.sleep(0.5)
+
+                            # Try multiple submit methods
+                            submit_success = False
+
+                            # Method 1: Try to find and click a submit button
+                            if not submit_success:
+                                button_selectors = [
+                                    "button[type='submit']",
+                                    "input[type='submit']",
+                                    "button.search-button",
+                                    ".searchButton",
+                                    "[aria-label*='search' i]",
+                                    "button:has(svg)",
+                                    "[type='submit']",
+                                    "button:text-is('Search')",
+                                    "button:text-matches('Search', 'i')",
+                                    "button.btn-search",
+                                    ".search-submit",
+                                    "#search-button",
+                                    "[data-testid*='search']",
+                                    "button[name*='search']",
+                                    "button[id*='search']",
+                                    "button:has-text('Search')",
+                                    "button:has-text('Go')",
+                                    "button:has-text('Submit')",
+                                    "button.btn-primary",
+                                    "button.btn-submit",
+                                    "button[aria-label*='search']",
+                                    "button[title*='search']",
+                                    ".btn-search",
+                                    ".search-icon",
+                                    "button:has(svg[aria-label*='search'])",
+                                    "button:has(img[alt*='search'])"
+                                ]
+                                
+                                for button_selector in button_selectors:
+                                    try:
+                                        button = self.page.locator(button_selector).first
+                                        if button and button.is_visible():
+                                            # Try JavaScript click first
+                                            try:
+                                                self.page.evaluate("button => button.click()", button)
+                                            except:
+                                                # Fall back to regular click
+                                                button.click()
+                                            submit_success = True
+                                            time.sleep(2)
+                                            break
+                                    except:
+                                        continue
+
+                            # Method 2: Try to submit the form directly
+                            if not submit_success:
+                                try:
+                                    # Find the closest form
+                                    form = self.page.evaluate("""(element) => {
+                                        const form = element.closest('form');
+                                        if (form) {
+                                            form.submit();
+                                            return true;
+                                        }
+                                        return false;
+                                    }""", element)
+                                    if form:
+                                        submit_success = True
+                                        time.sleep(2)
+                                except:
+                                    pass
+
+                            # Method 3: Try pressing Enter
+                            if not submit_success:
+                                try:
+                                    element.press("Enter")
+                                    submit_success = True
+                                    time.sleep(2)
+                                except:
+                                    try:
+                                        self.page.keyboard.press("Enter")
+                                        submit_success = True
+                                        time.sleep(2)
+                                    except:
+                                        pass
+
+                            # Method 4: Try dispatching form submit event
+                            if not submit_success:
+                                try:
+                                    self.page.evaluate("""(element) => {
+                                        const form = element.closest('form');
+                                        if (form) {
+                                            const event = new Event('submit', {
+                                                'bubbles': true,
+                                                'cancelable': true
+                                            });
+                                            form.dispatchEvent(event);
+                                            return true;
+                                        }
+                                        return false;
+                                    }""", element)
+                                    submit_success = True
+                                    time.sleep(2)
+                                except:
+                                    pass
                             
-                            return f"Successfully typed text into input field"
+                            if not button_clicked:
+                                # Try pressing Enter key
+                                try:
+                                    self.page.keyboard.press("Enter")
+                                    button_clicked = True
+                                    time.sleep(1)
+                                    try:
+                                        self.page.wait_for_load_state("networkidle", timeout=5000)
+                                    except:
+                                        pass
+                                except:
+                                    pass
+                            
+                            if button_clicked:
+                                return "Successfully typed text and submitted form"
+                            else:
+                                return "Successfully typed text into input field"
                     except Exception as type_error:
                         print(f"Type action failed: {str(type_error)}")
                         # Fall through to try other methods
@@ -794,7 +892,24 @@ class WebPerceptionAgent:
                                     "button:has(svg)",  # Many search buttons have SVG icons
                                     "[type='submit']",
                                     "button:text-is('Search')",
-                                    "button:text-matches('Search', 'i')"
+                                    "button:text-matches('Search', 'i')",
+                                    "button.btn-search",
+                                    ".search-submit",
+                                    "#search-button",
+                                    "[data-testid*='search']",
+                                    "button[name*='search']",
+                                    "button[id*='search']",
+                                    "button:has-text('Search')",
+                                    "button:has-text('Go')",
+                                    "button:has-text('Submit')",
+                                    "button.btn-primary",
+                                    "button.btn-submit",
+                                    "button[aria-label*='search']",
+                                    "button[title*='search']",
+                                    ".btn-search",
+                                    ".search-icon",
+                                    "button:has(svg[aria-label*='search'])",
+                                    "button:has(img[alt*='search'])"
                                 ]
                                 
                                 button_clicked = False
@@ -809,15 +924,23 @@ class WebPerceptionAgent:
                                         continue
                                 
                                 if not button_clicked:
-                                    input_element.press("Enter")
+                                    # Try pressing Enter key
+                                    try:
+                                        active_element = self.page.evaluate("document.activeElement")
+                                        if active_element:
+                                            self.page.keyboard.press("Enter")
+                                            button_clicked = True
+                                    except:
+                                        pass
                                 
-                                time.sleep(1)
-                                try:
-                                    self.page.wait_for_load_state("networkidle", timeout=5000)
-                                except:
-                                    pass
-                                
-                                return "Successfully submitted search"
+                                if button_clicked:
+                                    time.sleep(1)
+                                    try:
+                                        self.page.wait_for_load_state("networkidle", timeout=5000)
+                                    except:
+                                        pass
+                                    
+                                    return "Successfully submitted search"
                             else:
                                 return f"Successfully typed text into input field"
                     except Exception as e:
@@ -831,145 +954,9 @@ class WebPerceptionAgent:
                 
         elif action_type == "click":
             try:
-                # Define comprehensive click target selectors
-                click_selectors = {
-                    'button': [
-                        "button",
-                        "[role='button']",
-                        ".btn",
-                        "input[type='submit']",
-                        "input[type='button']",
-                        "[data-testid*='button']",
-                        "[class*='button']",
-                        "[id*='button']"
-                    ],
-                    'link': [
-                        "a",
-                        "[role='link']",
-                        "[onclick]",
-                        "[href]",
-                        "[data-testid*='link']"
-                    ],
-                    'menu': [
-                        "[role='menuitem']",
-                        ".menu-item",
-                        ".nav-item",
-                        "[data-testid*='menu']",
-                        "[class*='menu']"
-                    ],
-                    'tab': [
-                        "[role='tab']",
-                        ".tab",
-                        "[data-testid*='tab']"
-                    ],
-                    'checkbox': [
-                        "input[type='checkbox']",
-                        "[role='checkbox']"
-                    ],
-                    'radio': [
-                        "input[type='radio']",
-                        "[role='radio']"
-                    ]
-                }
-                
-                target_text = action_data.get("text", "")  # Keep original case
                 selector = action_data.get("selector", "")
                 expect_navigation = action_data.get("expect_navigation", False)
                 
-                def handle_navigation(element, href=None, selector_type=None):
-                    """Handle navigation after clicking an element."""
-                    try:
-                        # First try clicking with navigation wait
-                        with self.page.expect_navigation(timeout=30000) as nav:
-                            # Try multiple click methods in sequence
-                            try:
-                                # Try regular click first
-                                element.click()
-                            except:
-                                try:
-                                    # Try JavaScript click
-                                    self.page.evaluate("(element) => element.click()", element)
-                                except:
-                                    try:
-                                        # Try clicking center of element
-                                        bbox = element.bounding_box()
-                                        if bbox:
-                                            self.page.mouse.click(
-                                                bbox["x"] + bbox["width"] / 2,
-                                                bbox["y"] + bbox["height"] / 2
-                                            )
-                                    except:
-                                        # If all click methods fail, try direct navigation
-                                        if href:
-                                            self.page.goto(href, wait_until="domcontentloaded")
-                                            return True, f"Navigation completed via direct URL: {href}"
-                                        else:
-                                            raise Exception("All click methods failed")
-                            
-                            # Wait for navigation to complete
-                            nav.value
-                        
-                        # Additional wait for page stability
-                        try:
-                            self.page.wait_for_load_state("domcontentloaded", timeout=5000)
-                            self.page.wait_for_load_state("networkidle", timeout=5000)
-                        except:
-                            pass
-                        
-                        desc = f"Successfully clicked{' ' + selector_type if selector_type else ''} and navigated to: {self.page.url}"
-                        return True, desc
-                        
-                    except Exception as nav_error:
-                        print(f"Navigation error: {str(nav_error)}")
-                        
-                        # If navigation fails, try fallback approaches
-                        try:
-                            # Try direct navigation if we have href
-                            if href:
-                                print(f"Trying direct navigation to: {href}")
-                                self.page.goto(href, wait_until="domcontentloaded")
-                                try:
-                                    self.page.wait_for_load_state("networkidle", timeout=5000)
-                                except:
-                                    pass
-                                return True, f"Navigation completed via fallback: {href}"
-                            
-                            # Otherwise try clicking without navigation wait
-                            print("Trying click without navigation wait...")
-                            try:
-                                # Try regular click
-                                element.click()
-                            except:
-                                try:
-                                    # Try JavaScript click
-                                    self.page.evaluate("(element) => element.click()", element)
-                                except:
-                                    try:
-                                        # Try clicking center of element
-                                        bbox = element.bounding_box()
-                                        if bbox:
-                                            self.page.mouse.click(
-                                                bbox["x"] + bbox["width"] / 2,
-                                                bbox["y"] + bbox["height"] / 2
-                                            )
-                                    except Exception as e:
-                                        print(f"All click methods failed: {str(e)}")
-                                        return False, "Could not click element"
-                            
-                            # Wait longer for potential dynamic navigation
-                            time.sleep(3)
-                            
-                            try:
-                                self.page.wait_for_load_state("domcontentloaded", timeout=5000)
-                                return True, f"Navigation completed via click: {self.page.url}"
-                            except:
-                                return False, "Clicked element, waiting for navigation"
-                                
-                        except Exception as goto_error:
-                            print(f"All navigation attempts failed: {str(goto_error)}")
-                            return False, f"Navigation failed: {str(goto_error)}"
-                
-                # If a specific selector is provided, try that first
                 if selector:
                     try:
                         # Wait for element with increased timeout
@@ -988,138 +975,79 @@ class WebPerceptionAgent:
                                 
                             # Handle navigation (either expected or from href)
                             if expect_navigation or (href and not href.startswith(("#", "javascript:", "mailto:", "tel:"))):
-                                success, message = handle_navigation(element, href)
-                                return message
-                            else:
-                                # Regular click for non-navigation elements
-                                # Try multiple click methods
-                                try:
-                                    self.page.evaluate("(element) => element.click()", element)
-                                except:
+                                # Click with navigation wait
+                                with self.page.expect_navigation(timeout=30000) as nav:
+                                    # Try multiple click methods
                                     try:
+                                            # Try regular click first
+                                            element.click()
+                                    except:
+                                            try:
+                                                # Try JavaScript click
+                                                self.page.evaluate("(element) => element.click()", element)
+                                            except:
+                                                try:
+                                                    # Try clicking center of element
+                                                    bbox = element.bounding_box()
+                                                    if bbox:
+                                                        self.page.mouse.click(
+                                                            bbox["x"] + bbox["width"] / 2,
+                                                            bbox["y"] + bbox["height"] / 2
+                                                        )
+                                                except:
+                                                    # If all click methods fail, try pressing Enter
+                                                    try:
+                                                        self.page.keyboard.press("Enter")
+                                                    except:
+                                                        raise Exception("All click methods failed")
+                                                
+                                                # Wait for navigation to complete
+                                                nav.value
+                                            
+                                            # Additional wait for page stability
+                                            try:
+                                                self.page.wait_for_load_state("domcontentloaded", timeout=5000)
+                                                self.page.wait_for_load_state("networkidle", timeout=5000)
+                                            except:
+                                                pass
+                                            
+                                            return f"Successfully clicked and navigated to: {self.page.url}"
+                                            
+                                            try:
+                                                # Try to find and submit the form
+                                                form = element.evaluate("el => el.closest('form')")
+                                                if form:
+                                                    self.page.evaluate("form => form.submit()", form)
+                                                    time.sleep(1)
+                                                    try:
+                                                        self.page.wait_for_load_state("networkidle", timeout=5000)
+                                                    except:
+                                                        pass
+                                                    return f"Navigation completed via form submit: {self.page.url}"
+                                            except:
+                                                # If form submit fails, try direct navigation
+                                                if href:
+                                                    self.page.goto(href, wait_until="domcontentloaded")
+                                                    return f"Navigation completed via fallback: {href}"
+                                                else:
+                                                    # Last resort: click and wait
+                                                    element.click()
+                                                    time.sleep(2)
+                                                    return f"Clicked element, waiting for navigation"
+                                    else:
+                                        # Regular click for non-navigation elements
                                         element.click()
-                                    except:
-                                        bbox = element.bounding_box()
-                                        if bbox:
-                                            self.page.mouse.click(
-                                                bbox["x"] + bbox["width"] / 2,
-                                                bbox["y"] + bbox["height"] / 2
-                                            )
-                                time.sleep(0.5)
-                                return "Successfully clicked element"
-                    except Exception as selector_error:
-                        print(f"Specific selector failed: {str(selector_error)}")
-                        # Fall through to try comprehensive selectors
-                
-                # Try comprehensive selectors if specific selector failed or wasn't provided
-                for selector_type, selectors in click_selectors.items():
-                    for base_selector in selectors:
+                                        time.sleep(0.5)
+                                        return "Successfully clicked element"
+                    except Exception as click_error:
+                        print(f"Click error: {str(click_error)}")
+                        # Try pressing Enter as last resort
                         try:
-                            # Try exact text match
-                            element = self.page.locator(f"{base_selector}:text-is('{target_text}')").first
-                            if element and element.is_visible():
-                                element.scroll_into_view_if_needed()
-                                time.sleep(0.5)
-                                
-                                # Get href if it's a link
-                                href = None
-                                try:
-                                    href = element.get_attribute("href")
-                                except:
-                                    pass
-                                
-                                # Handle navigation if needed
-                                if expect_navigation or (href and not href.startswith(("#", "javascript:", "mailto:", "tel:"))):
-                                    success, message = handle_navigation(element, href, selector_type)
-                                    return message
-                                else:
-                                    # Try multiple click methods
-                                    try:
-                                        self.page.evaluate("(element) => element.click()", element)
-                                    except:
-                                        try:
-                                            element.click()
-                                        except:
-                                            bbox = element.bounding_box()
-                                            if bbox:
-                                                self.page.mouse.click(
-                                                    bbox["x"] + bbox["width"] / 2,
-                                                    bbox["y"] + bbox["height"] / 2
-                                                )
-                                    time.sleep(1)
-                                    return f"Clicked {selector_type} with text: {target_text}"
-                                
-                            # Try case-insensitive contains
-                            element = self.page.locator(f"{base_selector}:text-matches('{target_text}', 'i')").first
-                            if element and element.is_visible():
-                                element.scroll_into_view_if_needed()
-                                time.sleep(0.5)
-                                
-                                # Get href if it's a link
-                                href = None
-                                try:
-                                    href = element.get_attribute("href")
-                                except:
-                                    pass
-                                
-                                # Handle navigation if needed
-                                if expect_navigation or (href and not href.startswith(("#", "javascript:", "mailto:", "tel:"))):
-                                    success, message = handle_navigation(element, href, selector_type)
-                                    return message
-                                else:
-                                    # Try multiple click methods
-                                    try:
-                                        self.page.evaluate("(element) => element.click()", element)
-                                    except:
-                                        try:
-                                            element.click()
-                                        except:
-                                            bbox = element.bounding_box()
-                                            if bbox:
-                                                self.page.mouse.click(
-                                                    bbox["x"] + bbox["width"] / 2,
-                                                    bbox["y"] + bbox["height"] / 2
-                                                )
-                                    time.sleep(1)
-                                    return f"Clicked {selector_type} containing text: {target_text}"
-                                
-                            # Try aria-label and title attributes
-                            element = self.page.locator(f"{base_selector}[aria-label*='{target_text}' i], {base_selector}[title*='{target_text}' i]").first
-                            if element and element.is_visible():
-                                element.scroll_into_view_if_needed()
-                                time.sleep(0.5)
-                                
-                                # Get href if it's a link
-                                href = None
-                                try:
-                                    href = element.get_attribute("href")
-                                except:
-                                    pass
-                                
-                                # Handle navigation if needed
-                                if expect_navigation or (href and not href.startswith(("#", "javascript:", "mailto:", "tel:"))):
-                                    success, message = handle_navigation(element, href, selector_type)
-                                    return message
-                                else:
-                                    # Try multiple click methods
-                                    try:
-                                        self.page.evaluate("(element) => element.click()", element)
-                                    except:
-                                        try:
-                                            element.click()
-                                        except:
-                                            bbox = element.bounding_box()
-                                            if bbox:
-                                                self.page.mouse.click(
-                                                    bbox["x"] + bbox["width"] / 2,
-                                                    bbox["y"] + bbox["height"] / 2
-                                                )
-                                    time.sleep(1)
-                                    return f"Clicked {selector_type} with matching aria-label/title: {target_text}"
+                            self.page.keyboard.press("Enter")
+                            time.sleep(1)
+                            return "Pressed Enter key"
                         except:
-                            continue
-                
-                return "Could not find clickable element with specified text"
+                            return f"Click action failed: {str(click_error)}"
                 
             except Exception as e:
                 return f"Error during click action: {str(e)}"
@@ -1523,9 +1451,28 @@ class WebPerceptionAgent:
             
             # Handle search sequences
             elif any(search_word in task_lower for search_word in task_patterns['search']):
-                search_text = task.split(next(word for word in task_patterns['search'] if word.lower() in task_lower))[1].strip()
-                processed_tasks.append(f"type {search_text}")  # Use original case
-                processed_tasks.append("press Enter")
+                # Extract search terms and preserve case
+                search_text = None
+                for word in task_patterns['search']:
+                    if word in task_lower:
+                        # Split on the search word and take everything after it
+                        parts = task.split(word, 1)
+                        if len(parts) > 1:
+                            search_text = parts[1].strip()
+                            # Remove any trailing commands like "then click"
+                            for cmd in ["then click", "then press", "and click", "and press"]:
+                                if cmd in search_text.lower():
+                                    search_text = search_text.lower().split(cmd)[0].strip()
+                            break
+                
+                if search_text:
+                    # Add both type and click actions for search
+                    processed_tasks.append(f"type {search_text}")  # Use original case
+                    if "click search" in task_lower:
+                        processed_tasks.append("click search")  # Add explicit click if requested
+                    else:
+                        processed_tasks.append("press Enter")  # Default to Enter
+                    processed_tasks.append("wait for page load")
                 i += 1
             
             # Handle scroll commands
