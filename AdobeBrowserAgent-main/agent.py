@@ -155,27 +155,27 @@ class WebPerceptionAgent:
         try:
             # Get current page state
             state = self.get_page_state()
-            task_lower = task.lower()
+            task_lower = task.lower()  # Use lowercase only for comparison
             
             # Handle search tasks
             if any(word in task_lower for word in ["search", "find", "look up"]):
-                # Extract search terms
+                # Extract search terms from original task
                 search_terms = None
                 for word in ["search", "find", "look up"]:
                     if word in task_lower:
-                        search_terms = task_lower.split(word, 1)[1].strip()
+                        search_terms = task.split(word, 1)[1].strip()  # Use original case
                         break
                 
                 if search_terms:
                     return {
                         "action": "search",
-                        "text": search_terms
+                        "text": search_terms  # Use original case
                     }, "Performing search"
 
             # Handle type tasks
             if "type" in task_lower:
-                # Extract text to type from original task (not lowercase version)
-                type_text = task.split("type", 1)[1].strip()
+                # Extract text to type from original task
+                type_text = task.split("type", 1)[1].strip()  # Use original case
                 
                 # Check if this is a username/email field
                 if "username" in type_text.lower() or "email" in type_text.lower() or "user" in type_text.lower():
@@ -200,7 +200,7 @@ class WebPerceptionAgent:
                             #email,
                             input:not([type='submit']):not([type='button']):not([type='hidden']):not([type='password'])
                         """,
-                        "text": type_text
+                        "text": type_text  # Use original case
                     }, "Typing into username/email field"
                 # Check if this is a password field
                 elif "password" in type_text.lower() or any(word in task_lower for word in ["pass", "pwd", "secret"]):
@@ -218,7 +218,7 @@ class WebPerceptionAgent:
                             #password,
                             input[type='password']:not([disabled])
                         """,
-                        "text": type_text,
+                        "text": type_text,  # Use original case
                         "expect_navigation": False
                     }, "Typing into password field"
                 else:
@@ -1457,19 +1457,22 @@ class WebPerceptionAgent:
         processed_tasks = []
         i = 0
         while i < len(tasks):
-            task = tasks[i].lower()
+            task = tasks[i]  # Keep original case
+            task_lower = task.lower()  # Use lowercase only for comparison
             
             # Handle login sequences
-            if any(login_word in task for login_word in task_patterns['login']):
+            if any(login_word in task_lower for login_word in task_patterns['login']):
                 # Look ahead for email/username and password
                 login_sequence = []
                 for j in range(i, min(i + 3, len(tasks))):
-                    if '@' in tasks[j] or 'email' in tasks[j].lower() or 'username' in tasks[j].lower():
-                        login_sequence.append(f"type {tasks[j]}")
-                    elif 'password' in tasks[j].lower():
-                        login_sequence.append(f"type {tasks[j]}")
+                    curr_task = tasks[j]  # Keep original case
+                    curr_task_lower = curr_task.lower()  # Use lowercase only for comparison
+                    if '@' in curr_task or 'email' in curr_task_lower or 'username' in curr_task_lower:
+                        login_sequence.append(f"type {curr_task}")  # Use original case
+                    elif 'password' in curr_task_lower:
+                        login_sequence.append(f"type {curr_task}")  # Use original case
                         if j + 1 < len(tasks) and any(click in tasks[j + 1].lower() for click in task_patterns['click']):
-                            login_sequence.append(tasks[j + 1])
+                            login_sequence.append(tasks[j + 1])  # Use original case
                             i = j + 2
                         else:
                             login_sequence.append("click login")
@@ -1478,33 +1481,33 @@ class WebPerceptionAgent:
                 if login_sequence:
                     processed_tasks.extend(login_sequence)
                 else:
-                    processed_tasks.append(tasks[i])
+                    processed_tasks.append(task)  # Use original case
                     i += 1
             
             # Handle search sequences
-            elif any(search_word in task for search_word in task_patterns['search']):
-                search_text = task.split(next(word for word in task_patterns['search'] if word in task))[1].strip()
-                processed_tasks.append(f"type {search_text}")
+            elif any(search_word in task_lower for search_word in task_patterns['search']):
+                search_text = task.split(next(word for word in task_patterns['search'] if word.lower() in task_lower))[1].strip()
+                processed_tasks.append(f"type {search_text}")  # Use original case
                 processed_tasks.append("press Enter")
                 i += 1
             
             # Handle scroll commands
-            elif any(scroll_word in task for scroll_word in task_patterns['scroll']):
+            elif any(scroll_word in task_lower for scroll_word in task_patterns['scroll']):
                 processed_tasks.append("wait for page load")
-                processed_tasks.append(task)
+                processed_tasks.append(task)  # Use original case
                 processed_tasks.append("wait for page load")
                 i += 1
             
             # Handle navigation
-            elif any(nav_word in task for nav_word in task_patterns['navigate']):
-                url = task.split(next(word for word in task_patterns['navigate'] if word in task))[1].strip()
-                processed_tasks.append(f"navigate {url}")
+            elif any(nav_word in task_lower for nav_word in task_patterns['navigate']):
+                url = task.split(next(word for word in task_patterns['navigate'] if word.lower() in task_lower))[1].strip()
+                processed_tasks.append(f"navigate {url}")  # Use original case
                 processed_tasks.append("wait for page load")
                 i += 1
             
             # Handle other tasks
             else:
-                processed_tasks.append(task)
+                processed_tasks.append(task)  # Use original case
                 i += 1
         
         print("\nParsed tasks:")
