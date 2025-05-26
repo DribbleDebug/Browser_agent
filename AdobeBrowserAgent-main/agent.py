@@ -174,8 +174,8 @@ class WebPerceptionAgent:
 
             # Handle type tasks
             if "type" in task_lower:
-                # Extract text to type
-                type_text = task_lower.split("type", 1)[1].strip()
+                # Extract text to type from original task (not lowercase version)
+                type_text = task.split("type", 1)[1].strip()
                 
                 # Check if this is a username/email field
                 if "username" in type_text.lower() or "email" in type_text.lower() or "user" in type_text.lower():
@@ -691,7 +691,7 @@ class WebPerceptionAgent:
         action_type = action_data.get("action", "").lower()
         
         if action_type == "type" or action_type == "input" or action_type == "search":
-            text = action_data.get("text", "")
+            text = action_data.get("text", "")  # Get original text without converting to lower
             selector = action_data.get("selector", "")
             try:
                 # Wait for page to be ready
@@ -728,8 +728,8 @@ class WebPerceptionAgent:
                             element.fill("")
                             time.sleep(0.2)
                             
-                            # Type the text - always use fill() to preserve exact case
-                            element.fill(text)
+                            # Always use fill() to preserve exact case for all inputs
+                            element.fill(text)  # Use original text without case conversion
                             time.sleep(0.2)
                             
                             return f"Successfully typed text into input field"
@@ -758,17 +758,21 @@ class WebPerceptionAgent:
                     try:
                         input_element = self.page.locator(selector).first
                         if input_element and input_element.is_visible():
-                            # Clear existing text
-                            input_element.click()
-                            input_element.fill("")
-                            time.sleep(0.5)
+                            # Ensure element is in view
+                            input_element.scroll_into_view_if_needed()
+                            time.sleep(0.2)
                             
-                            # Type new text - preserve case for password fields
-                            if "password" in selector.lower() or "password" in input_element.get_attribute("type", "").lower():
-                                input_element.fill(text)  # Use fill to preserve exact case
-                            else:
-                                input_element.type(text, delay=50)  # Type with a slight delay
-                            time.sleep(0.5)
+                            # Click to focus
+                            input_element.click()
+                            time.sleep(0.2)
+                            
+                            # Clear existing text
+                            input_element.fill("")
+                            time.sleep(0.2)
+                            
+                            # Always use fill() to preserve exact case for all inputs
+                            input_element.fill(text)  # Use original text without case conversion
+                            time.sleep(0.2)
                             
                             # For search actions, try to submit
                             if action_type == "search":
@@ -804,10 +808,10 @@ class WebPerceptionAgent:
                                     self.page.wait_for_load_state("networkidle", timeout=5000)
                                 except:
                                     pass
-                                    
+                                
                                 return "Successfully submitted search"
                             else:
-                                return f"Successfully typed '{text}' into input field"
+                                return f"Successfully typed text into input field"
                     except Exception as e:
                         print(f"Input selector {selector} failed: {str(e)}")
                         continue
@@ -860,7 +864,7 @@ class WebPerceptionAgent:
                     ]
                 }
                 
-                target_text = action_data.get("text", "").lower()
+                target_text = action_data.get("text", "")  # Keep original case
                 selector = action_data.get("selector", "")
                 expect_navigation = action_data.get("expect_navigation", False)
                 
@@ -869,7 +873,22 @@ class WebPerceptionAgent:
                     try:
                         # Click with navigation wait
                         with self.page.expect_navigation(timeout=30000) as nav:
-                            element.click()
+                            # Try multiple click methods
+                            try:
+                                # Try JavaScript click first
+                                self.page.evaluate("(element) => element.click()", element)
+                            except:
+                                try:
+                                    # Try regular click
+                                    element.click()
+                                except:
+                                    # Try clicking center of element
+                                    bbox = element.bounding_box()
+                                    if bbox:
+                                        self.page.mouse.click(
+                                            bbox["x"] + bbox["width"] / 2,
+                                            bbox["y"] + bbox["height"] / 2
+                                        )
                             nav.value  # Wait for navigation
                         
                         # Additional wait for page stability
@@ -891,7 +910,19 @@ class WebPerceptionAgent:
                                 return True, f"Navigation completed via fallback: {href}"
                             # Otherwise just click and wait
                             else:
-                                element.click()
+                                # Try multiple click methods
+                                try:
+                                    self.page.evaluate("(element) => element.click()", element)
+                                except:
+                                    try:
+                                        element.click()
+                                    except:
+                                        bbox = element.bounding_box()
+                                        if bbox:
+                                            self.page.mouse.click(
+                                                bbox["x"] + bbox["width"] / 2,
+                                                bbox["y"] + bbox["height"] / 2
+                                            )
                                 time.sleep(2)  # Wait longer for potential dynamic navigation
                                 try:
                                     self.page.wait_for_load_state("domcontentloaded", timeout=5000)
@@ -924,7 +955,19 @@ class WebPerceptionAgent:
                                 return message
                             else:
                                 # Regular click for non-navigation elements
-                                element.click()
+                                # Try multiple click methods
+                                try:
+                                    self.page.evaluate("(element) => element.click()", element)
+                                except:
+                                    try:
+                                        element.click()
+                                    except:
+                                        bbox = element.bounding_box()
+                                        if bbox:
+                                            self.page.mouse.click(
+                                                bbox["x"] + bbox["width"] / 2,
+                                                bbox["y"] + bbox["height"] / 2
+                                            )
                                 time.sleep(0.5)
                                 return "Successfully clicked element"
                     except Exception as selector_error:
@@ -953,10 +996,22 @@ class WebPerceptionAgent:
                                     success, message = handle_navigation(element, href, selector_type)
                                     return message
                                 else:
-                                    element.click()
+                                    # Try multiple click methods
+                                    try:
+                                        self.page.evaluate("(element) => element.click()", element)
+                                    except:
+                                        try:
+                                            element.click()
+                                        except:
+                                            bbox = element.bounding_box()
+                                            if bbox:
+                                                self.page.mouse.click(
+                                                    bbox["x"] + bbox["width"] / 2,
+                                                    bbox["y"] + bbox["height"] / 2
+                                                )
                                     time.sleep(1)
                                     return f"Clicked {selector_type} with text: {target_text}"
-                            
+                                
                             # Try case-insensitive contains
                             element = self.page.locator(f"{base_selector}:text-matches('{target_text}', 'i')").first
                             if element and element.is_visible():
@@ -975,7 +1030,19 @@ class WebPerceptionAgent:
                                     success, message = handle_navigation(element, href, selector_type)
                                     return message
                                 else:
-                                    element.click()
+                                    # Try multiple click methods
+                                    try:
+                                        self.page.evaluate("(element) => element.click()", element)
+                                    except:
+                                        try:
+                                            element.click()
+                                        except:
+                                            bbox = element.bounding_box()
+                                            if bbox:
+                                                self.page.mouse.click(
+                                                    bbox["x"] + bbox["width"] / 2,
+                                                    bbox["y"] + bbox["height"] / 2
+                                                )
                                     time.sleep(1)
                                     return f"Clicked {selector_type} containing text: {target_text}"
                                 
@@ -997,7 +1064,19 @@ class WebPerceptionAgent:
                                     success, message = handle_navigation(element, href, selector_type)
                                     return message
                                 else:
-                                    element.click()
+                                    # Try multiple click methods
+                                    try:
+                                        self.page.evaluate("(element) => element.click()", element)
+                                    except:
+                                        try:
+                                            element.click()
+                                        except:
+                                            bbox = element.bounding_box()
+                                            if bbox:
+                                                self.page.mouse.click(
+                                                    bbox["x"] + bbox["width"] / 2,
+                                                    bbox["y"] + bbox["height"] / 2
+                                                )
                                     time.sleep(1)
                                     return f"Clicked {selector_type} with matching aria-label/title: {target_text}"
                         except:
@@ -1114,6 +1193,7 @@ class WebPerceptionAgent:
         # Extract password (anything after "password" until end or separator)
         password = None
         if "password" in tl:
+            # Find the index in the original task to preserve case
             password_idx = task.lower().index("password") + 8
             password = task[password_idx:].strip().strip('"').strip("'")
             # Remove any trailing separators or punctuation
