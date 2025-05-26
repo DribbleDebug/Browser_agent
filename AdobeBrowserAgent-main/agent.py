@@ -13,16 +13,68 @@ import base64
 import json
 import time
 import os
+import requests
 from io import BytesIO
-from typing import Dict, Any, Optional, Tuple, List
+from typing import Dict, Any, Optional, Tuple, List, Generator
 import re
 
 from playwright.sync_api import sync_playwright
 import gradio as gr
 from PIL import Image
-from together import Together
 
-import config
+# Configuration settings
+TOGETHER_API_KEY = "tgp_v1_90IItRNdPY_x27F1VC8c-PUUFvnR5CiwCv4ukbvDszk"  # Replace with your Together.ai API key
+DEFAULT_CHAT_MODEL = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+DEFAULT_VISION_MODEL = "meta-llama/llama-vision-free"
+DEFAULT_TEMPERATURE = 0.7
+DEFAULT_MAX_TOKENS = 1024
+DEFAULT_STREAM = True
+DEFAULT_HEADLESS = False
+DEFAULT_TIMEOUT = 30000  # milliseconds
+MAX_RETRIES = 3
+WAIT_TIME = 2  # seconds
+RETRY_DELAY = 1  # seconds
+
+class TogetherClient:
+    """Simplified Together.ai API client."""
+    
+    def __init__(self, api_key: str):
+        """Initialize the Together.ai client."""
+        self.api_key = api_key
+        self.base_url = "https://api.together.xyz/v1"
+        self.headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+    
+    def chat_completions(
+        self,
+        messages: List[Dict[str, str]],
+        model: str = DEFAULT_CHAT_MODEL,
+        temperature: float = DEFAULT_TEMPERATURE,
+        max_tokens: int = DEFAULT_MAX_TOKENS
+    ) -> Dict[str, Any]:
+        """Send a chat completion request."""
+        endpoint = f"{self.base_url}/chat/completions"
+        
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False
+        }
+        
+        try:
+            response = requests.post(
+                endpoint,
+                headers=self.headers,
+                json=payload
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Together.ai API request failed: {str(e)}")
 
 # Define the WebPerceptionAgent class
 class WebPerceptionAgent:
@@ -37,17 +89,8 @@ class WebPerceptionAgent:
     - Maintain action history and state
     """
     
-    def __init__(self, headless: bool = config.DEFAULT_HEADLESS):
-        """Initialize the web perception agent.
-        
-        Args:
-            headless: Whether to run the browser in headless mode (no GUI)
-        
-        The agent initializes:
-        - Browser automation components (Playwright)
-        - AI components (Together.ai client)
-        - State tracking (history, screenshots, status)
-        """
+    def __init__(self, headless: bool = DEFAULT_HEADLESS):
+        """Initialize the web perception agent."""
         # Browser automation settings
         self.headless = headless
         self.browser = None
@@ -57,18 +100,17 @@ class WebPerceptionAgent:
         
         # Initialize AI client
         try:
-            self.together_client = Together(api_key=config.TOGETHER_API_KEY)
-            if not self.together_client:
-                raise Exception("Failed to initialize Together client")
+            self.together_client = TogetherClient(api_key=TOGETHER_API_KEY)
+            print("✓ Together.ai client initialized")
         except Exception as e:
             print(f"Warning: Together client initialization failed: {str(e)}")
             self.together_client = None
             
         # State tracking
-        self.last_action = None  # Most recent action executed
-        self.action_history = []  # History of all actions
-        self.screenshots = []  # Screenshots with metadata
-        self.current_status = ""  # Current agent status
+        self.last_action = None
+        self.action_history = []
+        self.screenshots = []
+        self.current_status = ""
         
     def update_status(self, status: str):
         """Update the current status and notify any listeners.
@@ -109,32 +151,26 @@ class WebPerceptionAgent:
             return None
 
     def analyze_page_and_decide(self, task: str) -> Tuple[Dict[str, Any], str]:
-        """Analyze the current page and decide on the next action.
-        
-        This is the core decision-making method that:
-        1. Analyzes the current page state
-        2. Interprets the user's task
-        3. Decides what action to take next
-        
-        The method handles common scenarios:
-        - Navigation to URLs
-        - Search/typing tasks
-        - Clicking elements
-        - Scrolling
-        - Fallback to AI model for complex decisions
-        
-        Args:
-            task: The task description from the user
-            
-        Returns:
-            Tuple containing:
-            - Dict with the next action to execute
-            - String explaining the reasoning
-        """
+        """Analyze the current page and decide on the next action."""
         try:
             # Get current page state
             state = self.get_page_state()
             task_lower = task.lower()
+            
+            # Handle search tasks
+            if any(word in task_lower for word in ["search", "find", "look up"]):
+                # Extract search terms
+                search_terms = None
+                for word in ["search", "find", "look up"]:
+                    if word in task_lower:
+                        search_terms = task_lower.split(word, 1)[1].strip()
+                        break
+                
+                if search_terms:
+                    return {
+                        "action": "search",
+                        "text": search_terms
+                    }, "Performing search"
             
             # Handle blank page navigation
             if state['url'] == "about:blank":
@@ -147,31 +183,6 @@ class WebPerceptionAgent:
                     return {"action": "navigate", "text": url}, "Navigating to URL from task"
                 else:
                     return {"action": "navigate", "text": "https://www.google.com"}, "Navigating to default URL"
-
-            # Handle search tasks using generic selectors
-            if any(word in task_lower for word in ["search", "find", "look up", "type"]):
-                # Extract search terms after action word
-                search_terms = None
-                for word in ["search", "find", "look up", "type"]:
-                    if word in task_lower:
-                        search_terms = task_lower.split(word, 1)[1].strip()
-                        break
-                
-                if search_terms:
-                    return {
-                        "action": "type",
-                        "selector": """
-                            input[type='search'],
-                            input[name='q'],
-                            input[name='query'],
-                            input[name='search'],
-                            input[placeholder*='search' i],
-                            .search-input,
-                            #search-input,
-                            input[type='text']
-                        """,
-                        "text": search_terms
-                    }, "Typing search terms"
 
             # Handle click tasks with position or text targeting
             if "click" in task_lower:
@@ -273,17 +284,17 @@ class WebPerceptionAgent:
             # Get AI model's suggestion
             try:
                 if not self.together_client:
-                    self.together_client = Together(api_key=config.TOGETHER_API_KEY)
+                    self.together_client = TogetherClient(api_key=TOGETHER_API_KEY)
                 
-                response = self.together_client.chat.completions.create(
+                response = self.together_client.chat_completions(
                     messages=messages,
-                    model=config.DEFAULT_CHAT_MODEL,
-                    temperature=0.2,
-                    max_tokens=config.DEFAULT_MAX_TOKENS
+                    model=DEFAULT_CHAT_MODEL,
+                    temperature=DEFAULT_TEMPERATURE,
+                    max_tokens=DEFAULT_MAX_TOKENS
                 )
                 
-                if response and hasattr(response, 'choices') and len(response.choices) > 0:
-                    content = response.choices[0].message.content.strip()
+                if response and 'choices' in response and len(response['choices']) > 0:
+                    content = response['choices'][0]['message']['content'].strip()
                     json_match = re.search(r'\{[^{]*\}', content)
                     if json_match:
                         try:
@@ -337,20 +348,20 @@ class WebPerceptionAgent:
             # Test Together API
             try:
                 if not self.together_client:
-                    self.together_client = Together(api_key=config.TOGETHER_API_KEY)
+                    self.together_client = TogetherClient(api_key=TOGETHER_API_KEY)
                 
                 # Test with a simple chat completion
-                response = self.together_client.chat.completions.create(
+                response = self.together_client.chat_completions(
                     messages=[{
                         "role": "user",
                         "content": "Hello"
                     }],
-                    model=config.DEFAULT_CHAT_MODEL,
+                    model=DEFAULT_CHAT_MODEL,
                     max_tokens=10,
                     temperature=0.7
                 )
                 
-                if response and hasattr(response, 'choices') and len(response.choices) > 0:
+                if response and 'choices' in response and len(response['choices']) > 0:
                     print("✓ Together API connection successful")
                 else:
                     raise Exception("Invalid response format from Together API")
@@ -476,263 +487,412 @@ class WebPerceptionAgent:
         """Execute a single action with proper error handling."""
         action_type = action_data.get("action", "").lower()
         
-        if action_type == "navigate":
-            url = action_data.get("text", "")
-            if not url.startswith(("http://", "https://")):
-                url = "https://" + url
-                
-            # Enhanced page load handling
-            try:
-                # First try with networkidle
-                self.page.goto(url, wait_until="networkidle", timeout=30000)
-            except Exception as e:
-                print(f"Network idle timeout, falling back to domcontentloaded: {str(e)}")
-                try:
-                    # Fallback to domcontentloaded
-                    self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                except Exception as e2:
-                    print(f"DOM content load timeout, using basic load: {str(e2)}")
-                    # Final fallback
-                    self.page.goto(url, wait_until="load", timeout=30000)
-            
-            # Additional wait for stability
-            try:
-                self.page.wait_for_selector("body", timeout=5000)
-                time.sleep(2)  # Short wait for dynamic content
-            except:
-                pass
-                
-            return f"Navigated to {url}"
-            
-        elif action_type == "scroll":
-            direction = action_data.get("text", "").lower()
-            try:
-                # First try using JavaScript scrolling
-                try:
-                    if direction == "top":
-                        self.page.evaluate("window.scrollTo({ top: 0, behavior: 'smooth' })")
-                    elif direction == "bottom" or "bottom" in direction:
-                        # First scroll attempt
-                        self.page.evaluate("""
-                            window.scrollTo({
-                                top: document.body.scrollHeight,
-                                behavior: 'smooth'
-                            })
-                        """)
-                        time.sleep(1)  # Wait for dynamic content
-                        
-                        # Second scroll to handle any dynamically loaded content
-                        self.page.evaluate("""
-                            window.scrollTo({
-                                top: document.body.scrollHeight,
-                                behavior: 'smooth'
-                            })
-                        """)
-                    else:
-                        try:
-                            # Try to parse as number of pixels
-                            amount = int(direction)
-                            self.page.evaluate(f"""
-                                window.scrollBy({{
-                                    top: {amount},
-                                    behavior: 'smooth'
-                                }})
-                            """)
-                        except ValueError:
-                            # Default scroll amount (one viewport height)
-                            self.page.evaluate("""
-                                window.scrollBy({
-                                    top: window.innerHeight * 0.8,
-                                    behavior: 'smooth'
-                                })
-                            """)
-                    
-                    time.sleep(0.5)  # Wait for smooth scroll to complete
-                    return f"Scrolled {direction}"
-                    
-                except Exception as js_error:
-                    print(f"JavaScript scroll failed: {str(js_error)}")
-                    # Fallback to Playwright's mouse wheel simulation
-                    try:
-                        if direction == "top":
-                            self.page.mouse.wheel(0, -10000)
-                        elif direction == "bottom" or "bottom" in direction:
-                            self.page.mouse.wheel(0, 10000)
-                            time.sleep(1)
-                            self.page.mouse.wheel(0, 10000)  # Second attempt for dynamic content
-                        else:
-                            try:
-                                amount = int(direction)
-                                self.page.mouse.wheel(0, amount)
-                            except ValueError:
-                                self.page.mouse.wheel(0, 500)  # Default amount
-                        
-                        time.sleep(0.5)
-                        return f"Scrolled {direction} using mouse wheel"
-                    except Exception as wheel_error:
-                        print(f"Mouse wheel scroll failed: {str(wheel_error)}")
-                        # Final fallback: try keyboard
-                        if direction == "top":
-                            self.page.keyboard.press("Home")
-                        elif direction == "bottom" or "bottom" in direction:
-                            self.page.keyboard.press("End")
-                        else:
-                            self.page.keyboard.press("PageDown")
-                        return f"Scrolled {direction} using keyboard"
-                        
-            except Exception as e:
-                return f"Error scrolling: {str(e)}"
-            
-        elif action_type == "click":
-            selector = action_data.get("selector", "")
-            try:
-                # Wait for element with retry
-                max_retries = 3
-                retry_delay = 2
-                for attempt in range(max_retries):
-                    try:
-                        element = self.page.wait_for_selector(selector, state="visible", timeout=10000)
-                        if element:
-                            element.click()
-                            return f"Clicked element: {selector}"
-                    except Exception as e:
-                        if attempt < max_retries - 1:
-                            print(f"Click attempt {attempt + 1} failed, retrying in {retry_delay} seconds...")
-                            time.sleep(retry_delay)
-                            continue
-                        raise e
-                        
-                return f"Failed to click element: {selector}"
-            except Exception as e:
-                return f"Error clicking element: {str(e)}"
-            
-        elif action_type == "type":
+        if action_type == "type" or action_type == "input" or action_type == "search":
             text = action_data.get("text", "")
-            selector = action_data.get("selector", "")
-            
-            # Extract email and password from text if present
-            email_pattern = r'[\w\.-]+(?:\+[\w\.-]+)?@[\w\.-]+\.\w+'
-            email_match = re.search(email_pattern, text)
-            
-            # If this is an email field and we found an email in the text
-            if (any(email_indicator in selector.lower() for email_indicator in ["email", "username", "login"]) and 
-                email_match):
-                text = email_match.group(0)
-            # If this is a password field
-            elif any(pwd_indicator in selector.lower() for pwd_indicator in ["password", "pwd"]):
-                # Extract password (anything after "password" keyword)
-                if "password" in text.lower():
-                    pwd_start = text.lower().find("password") + 8
-                    text = text[pwd_start:].strip().strip('"\'').split()[0]
-            
-            # If no selector provided, try to find a suitable input
-            if not selector:
-                # Common input selectors
+            try:
+                # Wait for page to be ready
+                self.page.wait_for_load_state("domcontentloaded")
+                time.sleep(1)
+                
+                # For Wikipedia search
+                if "wikipedia" in self.page.url.lower():
+                    try:
+                        # Try Wikipedia's specific search input and button
+                        search_input = self.page.locator("input#searchInput").first
+                        search_button = self.page.locator("button#searchButton, input.searchButton").first
+                        
+                        if search_input and search_input.is_visible():
+                            search_input.click()
+                            search_input.fill(text)
+                            time.sleep(0.5)
+                            
+                            if search_button and search_button.is_visible():
+                                search_button.click()
+                            else:
+                                search_input.press("Enter")
+                            
+                            time.sleep(1)
+                            return "Successfully submitted Wikipedia search"
+                    except Exception as wiki_error:
+                        print(f"Wikipedia specific search failed: {str(wiki_error)}")
+                        # Fall through to generic search handling
+                
+                # Generic search handling
                 search_selectors = [
-                    # Email/Username fields
-                    "input[type='email']",
-                    "input[name='email']",
-                    "input[id*='email']",
-                    "input[name='username']",
-                    "input[id*='username']",
-                    # Password fields
-                    "input[type='password']",
-                    "input[name='password']",
-                    "input[id*='password']",
-                    # Search fields
+                    "input#searchInput",
                     "input[type='search']",
                     "input[name='q']",
-                    # Generic text inputs
+                    "input[name='search']",
+                    "input[placeholder*='search' i]",
+                    ".search-input",
                     "input[type='text']"
                 ]
                 
-                # Try each selector with retry
-                max_retries = 3
-                retry_delay = 2
-                
-                for sel in search_selectors:
-                    for attempt in range(max_retries):
-                        try:
-                            print(f"Trying selector: {sel} (attempt {attempt + 1})")
-                            element = self.page.wait_for_selector(sel, state="visible", timeout=5000)
-                            if element:
-                                selector = sel
-                                print(f"Found visible input with selector: {sel}")
-                                break
-                        except Exception as e:
-                            if attempt < max_retries - 1:
-                                print(f"Attempt {attempt + 1} failed, retrying in {retry_delay} seconds...")
-                                time.sleep(retry_delay)
-                                continue
-                            print(f"Selector {sel} failed all attempts: {str(e)}")
-                        
-                    if selector:  # If we found a working selector, stop trying others
-                        break
-                
-                if not selector:
-                    return "Could not find a suitable input field after all attempts"
-            
-            # Wait for the element and type
-            try:
-                print(f"Using selector for typing: {selector}")
-                element = self.page.wait_for_selector(selector, state="visible", timeout=10000)
-                if not element:
-                    return f"Could not find element with selector: {selector}"
-                
-                # Clear existing text
-                element.fill("")
-                time.sleep(0.5)  # Wait after clearing
-                
-                # Type the text
-                element.fill(text)
-                time.sleep(0.5)  # Wait after typing
-                
-                # Press Enter for search inputs
-                if any(s in selector.lower() for s in ["search", "q", "query"]):
-                    element.press("Enter")
-                    time.sleep(1)  # Wait after submit
-                    
-                    # Wait for navigation if it happens
+                # Try each search selector
+                for selector in search_selectors:
                     try:
-                        # First wait for navigation to start
-                        self.page.wait_for_load_state("domcontentloaded", timeout=5000)
-                        
-                        # Then wait for network idle (but don't fail if it times out)
-                        try:
-                            self.page.wait_for_load_state("networkidle", timeout=5000)
-                        except:
-                            pass
-                        
-                        # Additional wait for search results to load
-                        time.sleep(1)
-                        
-                        # Check if we're on a search results page
-                        if "search" in self.page.url.lower() or "wiki" in self.page.url.lower():
-                            return f"Typed '{text}' into search and submitted"
-                        else:
-                            return f"Warning: Search submitted but unexpected URL: {self.page.url}"
+                        search_input = self.page.locator(selector).first
+                        if search_input and search_input.is_visible():
+                            # Clear existing text
+                            search_input.click()
+                            search_input.fill("")
+                            time.sleep(0.5)
+                            
+                            # Type new text
+                            search_input.fill(text)
+                            time.sleep(0.5)
+                            
+                            # Try to find and click a search button
+                            button_selectors = [
+                                "button[type='submit']",
+                                "input[type='submit']",
+                                "button.search-button",
+                                ".searchButton",
+                                "[aria-label*='search' i]",
+                                "button:has(svg)"  # Many search buttons have SVG icons
+                            ]
+                            
+                            button_clicked = False
+                            for button_selector in button_selectors:
+                                try:
+                                    button = self.page.locator(button_selector).first
+                                    if button and button.is_visible():
+                                        button.click()
+                                        button_clicked = True
+                                        break
+                                except:
+                                    continue
+                            
+                            if not button_clicked:
+                                search_input.press("Enter")
+                            
+                            time.sleep(1)
+                            try:
+                                self.page.wait_for_load_state("networkidle", timeout=5000)
+                            except:
+                                pass
+                                
+                            return "Successfully submitted search"
                     except Exception as e:
-                        return f"Warning: Search submitted but navigation failed: {str(e)}"
+                        print(f"Search selector {selector} failed: {str(e)}")
+                        continue
                 
-                return f"Typed '{text}' into {selector}"
+                return "Could not find search input"
+                
             except Exception as e:
-                return f"Error typing text: {str(e)}"
-            
-        elif action_type == "wait":
-            if "selector" in action_data:
-                selector = action_data["selector"]
+                return f"Error performing search: {str(e)}"
+                
+        elif action_type == "click":
+            try:
+                # Define comprehensive click target selectors
+                click_selectors = {
+                    'button': [
+                        "button",
+                        "[role='button']",
+                        ".btn",
+                        "input[type='submit']",
+                        "input[type='button']",
+                        "[data-testid*='button']",
+                        "[class*='button']",
+                        "[id*='button']"
+                    ],
+                    'link': [
+                        "a",
+                        "[role='link']",
+                        "[onclick]",
+                        "[href]",
+                        "[data-testid*='link']"
+                    ],
+                    'menu': [
+                        "[role='menuitem']",
+                        ".menu-item",
+                        ".nav-item",
+                        "[data-testid*='menu']",
+                        "[class*='menu']"
+                    ],
+                    'tab': [
+                        "[role='tab']",
+                        ".tab",
+                        "[data-testid*='tab']"
+                    ],
+                    'checkbox': [
+                        "input[type='checkbox']",
+                        "[role='checkbox']"
+                    ],
+                    'radio': [
+                        "input[type='radio']",
+                        "[role='radio']"
+                    ]
+                }
+                
+                target_text = action_data.get("text", "").lower()
+                selector = action_data.get("selector", "")
+                
+                # If a specific selector is provided, try that first
+                if selector:
+                    try:
+                        # Wait for element with increased timeout
+                        element = self.page.wait_for_selector(selector, state="visible", timeout=30000)
+                        if element:
+                            # Scroll element into view and wait a moment
+                            element.scroll_into_view_if_needed()
+                            time.sleep(0.5)
+                            
+                            # Get the href attribute if it's a link
+                            href = None
+                            try:
+                                href = element.get_attribute("href")
+                            except:
+                                pass
+                                
+                            # If it's a link with href, handle navigation
+                            if href and not href.startswith(("#", "javascript:", "mailto:", "tel:")):
+                                try:
+                                    # Click with navigation wait
+                                    with self.page.expect_navigation(timeout=30000) as nav:
+                                        element.click()
+                                        nav.value  # Wait for navigation
+                                    
+                                    # Additional wait for page stability
+                                    try:
+                                        self.page.wait_for_load_state("domcontentloaded", timeout=5000)
+                                        self.page.wait_for_load_state("networkidle", timeout=5000)
+                                    except:
+                                        pass
+                                    
+                                    return f"Successfully clicked and navigated to: {self.page.url}"
+                                except Exception as nav_error:
+                                    print(f"Navigation error: {str(nav_error)}")
+                                    # If navigation fails, try direct navigation
+                                    try:
+                                        self.page.goto(href, wait_until="domcontentloaded")
+                                        return f"Navigation completed via fallback: {href}"
+                                    except Exception as goto_error:
+                                        return f"Navigation failed: {str(goto_error)}"
+                            else:
+                                # Regular click for non-navigation elements
+                                element.click()
+                                time.sleep(0.5)
+                                return "Successfully clicked element"
+                    except Exception as selector_error:
+                        print(f"Specific selector failed: {str(selector_error)}")
+                        # Fall through to try other selectors
+                
+                # Try text-based matching for all interactive elements
+                for selector_type, selectors in click_selectors.items():
+                    for base_selector in selectors:
+                        try:
+                            # Try exact text match
+                            element = self.page.locator(f"{base_selector}:text-is('{target_text}')").first
+                            if element and element.is_visible():
+                                element.scroll_into_view_if_needed()
+                                time.sleep(0.5)
+                                
+                                # Check for href if it's potentially a link
+                                href = None
+                                try:
+                                    href = element.get_attribute("href")
+                                except:
+                                    pass
+                                
+                                # Handle navigation for links
+                                if href and not href.startswith(("#", "javascript:", "mailto:", "tel:")):
+                                    try:
+                                        with self.page.expect_navigation(timeout=30000) as nav:
+                                            element.click()
+                                            nav.value
+                                        try:
+                                            self.page.wait_for_load_state("domcontentloaded", timeout=5000)
+                                            self.page.wait_for_load_state("networkidle", timeout=5000)
+                                        except:
+                                            pass
+                                        return f"Clicked {selector_type} and navigated to: {self.page.url}"
+                                    except Exception as nav_error:
+                                        print(f"Navigation error: {str(nav_error)}")
+                                        try:
+                                            self.page.goto(href, wait_until="domcontentloaded")
+                                            return f"Navigation completed via fallback: {href}"
+                                        except Exception as goto_error:
+                                            return f"Navigation failed: {str(goto_error)}"
+                                else:
+                                    element.click()
+                                    time.sleep(1)
+                                    return f"Clicked {selector_type} with text: {target_text}"
+                            
+                            # Try case-insensitive contains
+                            element = self.page.locator(f"{base_selector}:text-matches('{target_text}', 'i')").first
+                            if element and element.is_visible():
+                                element.scroll_into_view_if_needed()
+                                time.sleep(0.5)
+                                
+                                # Check for href if it's potentially a link
+                                href = None
+                                try:
+                                    href = element.get_attribute("href")
+                                except:
+                                    pass
+                                
+                                # Handle navigation for links
+                                if href and not href.startswith(("#", "javascript:", "mailto:", "tel:")):
+                                    try:
+                                        with self.page.expect_navigation(timeout=30000) as nav:
+                                            element.click()
+                                            nav.value
+                                        try:
+                                            self.page.wait_for_load_state("domcontentloaded", timeout=5000)
+                                            self.page.wait_for_load_state("networkidle", timeout=5000)
+                                        except:
+                                            pass
+                                        return f"Clicked {selector_type} and navigated to: {self.page.url}"
+                                    except Exception as nav_error:
+                                        print(f"Navigation error: {str(nav_error)}")
+                                        try:
+                                            self.page.goto(href, wait_until="domcontentloaded")
+                                            return f"Navigation completed via fallback: {href}"
+                                        except Exception as goto_error:
+                                            return f"Navigation failed: {str(goto_error)}"
+                                else:
+                                    element.click()
+                                    time.sleep(1)
+                                    return f"Clicked {selector_type} containing text: {target_text}"
+                                
+                            # Try aria-label and title attributes
+                            element = self.page.locator(f"{base_selector}[aria-label*='{target_text}' i], {base_selector}[title*='{target_text}' i]").first
+                            if element and element.is_visible():
+                                element.scroll_into_view_if_needed()
+                                time.sleep(0.5)
+                                
+                                # Check for href if it's potentially a link
+                                href = None
+                                try:
+                                    href = element.get_attribute("href")
+                                except:
+                                    pass
+                                
+                                # Handle navigation for links
+                                if href and not href.startswith(("#", "javascript:", "mailto:", "tel:")):
+                                    try:
+                                        with self.page.expect_navigation(timeout=30000) as nav:
+                                            element.click()
+                                            nav.value
+                                        try:
+                                            self.page.wait_for_load_state("domcontentloaded", timeout=5000)
+                                            self.page.wait_for_load_state("networkidle", timeout=5000)
+                                        except:
+                                            pass
+                                        return f"Clicked {selector_type} and navigated to: {self.page.url}"
+                                    except Exception as nav_error:
+                                        print(f"Navigation error: {str(nav_error)}")
+                                        try:
+                                            self.page.goto(href, wait_until="domcontentloaded")
+                                            return f"Navigation completed via fallback: {href}"
+                                        except Exception as goto_error:
+                                            return f"Navigation failed: {str(goto_error)}"
+                                else:
+                                    element.click()
+                                    time.sleep(1)
+                                    return f"Clicked {selector_type} with matching aria-label/title: {target_text}"
+                        except:
+                            continue
+                
+                return "Could not find clickable element with specified text"
+                
+            except Exception as e:
+                return f"Error during click action: {str(e)}"
+                
+        elif action_type == "scroll":
+            try:
+                direction = action_data.get("text", "").lower()
+                
+                # Try JavaScript scrolling first
                 try:
-                    self.page.wait_for_selector(selector, timeout=10000)
-                    return f"Waited for element: {selector}"
-                except Exception as e:
-                    return f"Error waiting for element: {str(e)}"
-            else:
-                seconds = float(action_data.get("text", "1"))
-                time.sleep(seconds)
-                return f"Waited for {seconds} seconds"
+                    if direction == "top":
+                        self.page.evaluate("window.scrollTo({ top: 0, behavior: 'smooth' })")
+                    elif direction == "bottom":
+                        self.page.evaluate("""
+                            window.scrollTo({
+                                top: document.body.scrollHeight,
+                                behavior: 'smooth'
+                            });
+                        """)
+                        time.sleep(1)
+                        # Second scroll for dynamic content
+                        self.page.evaluate("""
+                            window.scrollTo({
+                                top: document.body.scrollHeight,
+                                behavior: 'smooth'
+                            });
+                        """)
+                    else:
+                        try:
+                            amount = int(direction)
+                        except:
+                            amount = 500
+                        self.page.evaluate(f"""
+                            window.scrollBy({{
+                                top: {amount},
+                                behavior: 'smooth'
+                            }});
+                        """)
+                except Exception as js_error:
+                    print(f"JavaScript scroll failed: {str(js_error)}")
+                    # Fallback to mouse wheel
+                    if direction == "top":
+                        self.page.mouse.wheel(0, -10000)
+                    elif direction == "bottom":
+                        self.page.mouse.wheel(0, 10000)
+                        time.sleep(1)
+                        self.page.mouse.wheel(0, 10000)
+                    else:
+                        try:
+                            amount = int(direction)
+                        except:
+                            amount = 500
+                        self.page.mouse.wheel(0, amount)
+                
+                time.sleep(1)
+                return f"Scrolled {direction}"
+                
+            except Exception as e:
+                return f"Error scrolling: {str(e)}"
+                
+        elif action_type == "navigate":
+            try:
+                url = action_data.get("text", "")
+                if not url.startswith(("http://", "https://")):
+                    url = "https://" + url
+                
+                # Enhanced navigation with retries
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        if attempt == 0:
+                            self.page.goto(url, wait_until="networkidle", timeout=30000)
+                        elif attempt == 1:
+                            self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        else:
+                            self.page.goto(url, wait_until="load", timeout=30000)
+                        break
+                    except Exception as nav_error:
+                        print(f"Navigation attempt {attempt + 1} failed: {str(nav_error)}")
+                        if attempt == max_retries - 1:
+                            raise nav_error
+                        time.sleep(2)
+                
+                # Wait for page stability
+                try:
+                    self.page.wait_for_selector("body", timeout=5000)
+                    time.sleep(2)
+                except:
+                    pass
+                
+                return f"Navigated to {url}"
+                
+            except Exception as e:
+                return f"Error navigating: {str(e)}"
         
         else:
-            raise ValueError(f"Unknown action type: {action_type}")
+            return f"Unknown action type: {action_type}"
     
     def _get_fallback_action(self, task: str) -> Tuple[Dict[str, Any], str]:
         """Get a fallback action based on the task description."""
@@ -972,18 +1132,28 @@ class WebPerceptionAgent:
     
     def parse_sequential_tasks(self, task_description: str) -> List[str]:
         """Parse a complex task description into sequential subtasks."""
+        # Task keywords and their variations
+        task_patterns = {
+            'login': ['login', 'sign in', 'signin'],
+            'type': ['type', 'enter', 'input', 'fill'],
+            'click': ['click', 'press', 'select', 'choose'],
+            'scroll': ['scroll', 'move'],
+            'navigate': ['go to', 'visit', 'open', 'navigate to'],
+            'search': ['search', 'look for', 'find']
+        }
+        
         # Common task separators
         separators = [
-            " then ",
-            " and then ",
-            " after that ",
-            ", then ",
-            "; ",
-            " next ",
-            " followed by ",
-            " when ",
-            " after ",
-            " once "
+            ' then ',
+            ' and then ',
+            ' after that ',
+            ', then ',
+            '; ',
+            ' next ',
+            ' followed by ',
+            ' when ',
+            ' after ',
+            ' once '
         ]
         
         # Split tasks based on separators
@@ -995,21 +1165,59 @@ class WebPerceptionAgent:
                 new_tasks.extend([t.strip() for t in split_tasks if t.strip()])
             tasks = new_tasks
         
-        # Process tasks and handle scroll commands specifically
+        # Process tasks and extract login sequences
         processed_tasks = []
-        for task in tasks:
-            task_lower = task.lower()
+        i = 0
+        while i < len(tasks):
+            task = tasks[i].lower()
             
-            # Handle scroll tasks
-            if "scroll" in task_lower:
-                # Add a wait before scrolling
+            # Handle login sequences
+            if any(login_word in task for login_word in task_patterns['login']):
+                # Look ahead for email/username and password
+                login_sequence = []
+                for j in range(i, min(i + 3, len(tasks))):
+                    if '@' in tasks[j] or 'email' in tasks[j].lower() or 'username' in tasks[j].lower():
+                        login_sequence.append(f"type {tasks[j]}")
+                    elif 'password' in tasks[j].lower():
+                        login_sequence.append(f"type {tasks[j]}")
+                        if j + 1 < len(tasks) and any(click in tasks[j + 1].lower() for click in task_patterns['click']):
+                            login_sequence.append(tasks[j + 1])
+                            i = j + 2
+                        else:
+                            login_sequence.append("click login")
+                            i = j + 1
+                        break
+                if login_sequence:
+                    processed_tasks.extend(login_sequence)
+                else:
+                    processed_tasks.append(tasks[i])
+                    i += 1
+            
+            # Handle search sequences
+            elif any(search_word in task for search_word in task_patterns['search']):
+                search_text = task.split(next(word for word in task_patterns['search'] if word in task))[1].strip()
+                processed_tasks.append(f"type {search_text}")
+                processed_tasks.append("press Enter")
+                i += 1
+            
+            # Handle scroll commands
+            elif any(scroll_word in task for scroll_word in task_patterns['scroll']):
                 processed_tasks.append("wait for page load")
-                # Add the scroll task directly
                 processed_tasks.append(task)
-                # Add a wait after scrolling
                 processed_tasks.append("wait for page load")
+                i += 1
+            
+            # Handle navigation
+            elif any(nav_word in task for nav_word in task_patterns['navigate']):
+                url = task.split(next(word for word in task_patterns['navigate'] if word in task))[1].strip()
+                processed_tasks.append(f"navigate {url}")
+                processed_tasks.append("wait for page load")
+                i += 1
+            
+            # Handle other tasks
             else:
                 processed_tasks.append(task)
+                i += 1
         
         print("\nParsed tasks:")
         for i, task in enumerate(processed_tasks, 1):
@@ -1317,41 +1525,21 @@ def check_system_requirements():
     """Check if all system requirements are met."""
     try:
         # Check Together.ai configuration
-        from together import Together
-        if not config.TOGETHER_API_KEY:
+        if not TOGETHER_API_KEY or TOGETHER_API_KEY == "YOUR_API_KEY_HERE":
             print("✗ Together.ai API key not configured")
-            print("Update your API key in config.py")
+            print("Update your API key in the TOGETHER_API_KEY variable")
             return False
         
         # Test Together.ai connection
-        client = Together(
-            api_key=config.TOGETHER_API_KEY,
-            chat_model=config.DEFAULT_CHAT_MODEL,
-            vision_model=config.DEFAULT_VISION_MODEL
-        )
-        models = client.get_models()
-        if not models:
-            print("✗ Together.ai API key invalid or no models available")
-            print("Check your API key in config.py")
+        try:
+            client = TogetherClient(api_key=TOGETHER_API_KEY)
+            response = client.chat_completions(messages=[{"role": "user", "content": "Hello"}])
+            print("✓ Together.ai connection successful")
+        except Exception as e:
+            print(f"✗ Together.ai setup failed: {str(e)}")
+            print("Check your API key and internet connection")
             return False
             
-        print("✓ Together.ai connection successful")
-        print(f"✓ Available models: {len(models)}")
-        
-        # Verify required models are available
-        required_models = [config.DEFAULT_CHAT_MODEL, config.DEFAULT_VISION_MODEL]
-        missing_models = []
-        
-        for required_model in required_models:
-            if not any(required_model.lower() in model.get("name", "").lower() for model in models):
-                missing_models.append(required_model)
-        
-        if missing_models:
-            print(f"✗ Required models not available: {', '.join(missing_models)}")
-            return False
-            
-        print("✓ Required models are available")
-        
         # Check Gradio
         try:
             import gradio as gr
@@ -1365,13 +1553,12 @@ def check_system_requirements():
         return True
         
     except Exception as e:
-        print(f"✗ Together.ai setup failed: {str(e)}")
+        print(f"✗ System check failed: {str(e)}")
         print("Check your API key and internet connection")
         return False
 
-# Main function to run the application
 def main():
-    """Main function with enhanced error checking and setup."""
+    """Main function to run the application."""
     try:
         print("\n=== Starting Web Agent Application ===")
         
@@ -1402,7 +1589,7 @@ def main():
         print("\nTroubleshooting steps:")
         print("1. Make sure all requirements are installed: pip install -r requirements.txt")
         print("2. Install Playwright browsers: playwright install")
-        print("3. Configure your Together.ai API key in config.py")
+        print("3. Configure your Together.ai API key in the TOGETHER_API_KEY variable")
         print("4. Check your internet connection")
         print("5. Check system resources (CPU, memory)")
         print("6. Try restarting your computer")
