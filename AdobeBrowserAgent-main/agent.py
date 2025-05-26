@@ -226,10 +226,18 @@ class WebPerceptionAgent:
                     return {
                         "action": "type",
                         "selector": """
-                            input[type='text'],
-                            input[type='search'],
-                            input:not([type='submit']):not([type='button']):not([type='hidden']),
-                            textarea
+                            input[type='text']",
+                            input[type='search']",
+                            input[type='email']",
+                            input[name='q']",
+                            input[name='search']",
+                            input[placeholder*='search' i]",
+                            input[placeholder*='type' i]",
+                            input[placeholder*='enter' i]",
+                            ".search-input",
+                            ".text-input",
+                            "textarea",
+                            "input:not([type='submit']):not([type='button']):not([type='hidden'])"
                         """,
                         "text": type_text
                     }, "Typing text"
@@ -871,25 +879,35 @@ class WebPerceptionAgent:
                 def handle_navigation(element, href=None, selector_type=None):
                     """Handle navigation after clicking an element."""
                     try:
-                        # Click with navigation wait
+                        # First try clicking with navigation wait
                         with self.page.expect_navigation(timeout=30000) as nav:
-                            # Try multiple click methods
+                            # Try multiple click methods in sequence
                             try:
-                                # Try JavaScript click first
-                                self.page.evaluate("(element) => element.click()", element)
+                                # Try regular click first
+                                element.click()
                             except:
                                 try:
-                                    # Try regular click
-                                    element.click()
+                                    # Try JavaScript click
+                                    self.page.evaluate("(element) => element.click()", element)
                                 except:
-                                    # Try clicking center of element
-                                    bbox = element.bounding_box()
-                                    if bbox:
-                                        self.page.mouse.click(
-                                            bbox["x"] + bbox["width"] / 2,
-                                            bbox["y"] + bbox["height"] / 2
-                                        )
-                            nav.value  # Wait for navigation
+                                    try:
+                                        # Try clicking center of element
+                                        bbox = element.bounding_box()
+                                        if bbox:
+                                            self.page.mouse.click(
+                                                bbox["x"] + bbox["width"] / 2,
+                                                bbox["y"] + bbox["height"] / 2
+                                            )
+                                    except:
+                                        # If all click methods fail, try direct navigation
+                                        if href:
+                                            self.page.goto(href, wait_until="domcontentloaded")
+                                            return True, f"Navigation completed via direct URL: {href}"
+                                        else:
+                                            raise Exception("All click methods failed")
+                            
+                            # Wait for navigation to complete
+                            nav.value
                         
                         # Additional wait for page stability
                         try:
@@ -900,36 +918,55 @@ class WebPerceptionAgent:
                         
                         desc = f"Successfully clicked{' ' + selector_type if selector_type else ''} and navigated to: {self.page.url}"
                         return True, desc
+                        
                     except Exception as nav_error:
                         print(f"Navigation error: {str(nav_error)}")
-                        # If navigation fails, try both approaches
+                        
+                        # If navigation fails, try fallback approaches
                         try:
                             # Try direct navigation if we have href
                             if href:
+                                print(f"Trying direct navigation to: {href}")
                                 self.page.goto(href, wait_until="domcontentloaded")
-                                return True, f"Navigation completed via fallback: {href}"
-                            # Otherwise just click and wait
-                            else:
-                                # Try multiple click methods
                                 try:
+                                    self.page.wait_for_load_state("networkidle", timeout=5000)
+                                except:
+                                    pass
+                                return True, f"Navigation completed via fallback: {href}"
+                            
+                            # Otherwise try clicking without navigation wait
+                            print("Trying click without navigation wait...")
+                            try:
+                                # Try regular click
+                                element.click()
+                            except:
+                                try:
+                                    # Try JavaScript click
                                     self.page.evaluate("(element) => element.click()", element)
                                 except:
                                     try:
-                                        element.click()
-                                    except:
+                                        # Try clicking center of element
                                         bbox = element.bounding_box()
                                         if bbox:
                                             self.page.mouse.click(
                                                 bbox["x"] + bbox["width"] / 2,
                                                 bbox["y"] + bbox["height"] / 2
                                             )
-                                time.sleep(2)  # Wait longer for potential dynamic navigation
-                                try:
-                                    self.page.wait_for_load_state("domcontentloaded", timeout=5000)
-                                    return True, f"Navigation completed via click: {self.page.url}"
-                                except:
-                                    return False, "Clicked element, waiting for navigation"
+                                    except Exception as e:
+                                        print(f"All click methods failed: {str(e)}")
+                                        return False, "Could not click element"
+                            
+                            # Wait longer for potential dynamic navigation
+                            time.sleep(3)
+                            
+                            try:
+                                self.page.wait_for_load_state("domcontentloaded", timeout=5000)
+                                return True, f"Navigation completed via click: {self.page.url}"
+                            except:
+                                return False, "Clicked element, waiting for navigation"
+                                
                         except Exception as goto_error:
+                            print(f"All navigation attempts failed: {str(goto_error)}")
                             return False, f"Navigation failed: {str(goto_error)}"
                 
                 # If a specific selector is provided, try that first
