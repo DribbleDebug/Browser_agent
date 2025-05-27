@@ -97,6 +97,7 @@ class WebPerceptionAgent:
         self.page = None
         self.context = None
         self.playwright = None
+        self.progress_callback = None
         
         # Initialize AI client
         try:
@@ -120,6 +121,8 @@ class WebPerceptionAgent:
         """
         self.current_status = status
         print(f"Status: {status}")
+        if self.progress_callback:
+            self.progress_callback(None, None, status)
         
     def take_screenshot(self, reason: str = ""):
         """Take a screenshot of the current page with context.
@@ -145,6 +148,11 @@ class WebPerceptionAgent:
                 'action': self.last_action
             }
             self.screenshots.append(screenshot)
+            
+            # Send screenshot to UI if callback exists
+            if self.progress_callback:
+                self.progress_callback(None, screenshot['image'], None)
+                
             return screenshot
         except Exception as e:
             print(f"Warning: Screenshot failed: {str(e)}")
@@ -352,7 +360,7 @@ class WebPerceptionAgent:
                             button:has-text('Submit'),
                             button.btn-primary,
                             button.btn-submit,
-                            button[aria-label*='search'],
+                            button[aria-label*='search']",
                             button[title*='search'],
                             .btn-search,
                             .search-icon,
@@ -614,10 +622,11 @@ class WebPerceptionAgent:
             action_data = json.loads(action_json_str) if isinstance(action_json_str, str) else action_json_str
             
             # Update status
-            self.update_status(f"Executing action: {action_data['action']}")
+            status_msg = f"Executing action: {action_data['action']}"
+            self.update_status(status_msg)
             
             # Take pre-action screenshot
-            self.take_screenshot(f"Before {action_data['action']}")
+            pre_screenshot = self.take_screenshot(f"Before {action_data['action']}")
             
             max_retries = 3
             retry_count = 0
@@ -632,7 +641,7 @@ class WebPerceptionAgent:
                     result = self._execute_single_action(action_data)
                     
                     # Take post-action screenshot
-                    self.take_screenshot(f"After {action_data['action']}")
+                    post_screenshot = self.take_screenshot(f"After {action_data['action']}")
                     
                     # Wait for any potential page updates
                     try:
@@ -640,12 +649,21 @@ class WebPerceptionAgent:
                     except:
                         pass  # Ignore timeout on networkidle
                     
+                    # Send result to UI
+                    if self.progress_callback:
+                        self.progress_callback(result, None, None)
+                    
                     return result
                     
                 except Exception as e:
                     last_error = e
                     retry_count += 1
-                    print(f"Action attempt {retry_count} failed: {str(e)}")
+                    error_msg = f"Action attempt {retry_count} failed: {str(e)}"
+                    print(error_msg)
+                    
+                    # Send error to UI
+                    if self.progress_callback:
+                        self.progress_callback(error_msg, None, None)
                     
                     if retry_count < max_retries:
                         print(f"Retrying in 1 second...")
@@ -663,15 +681,21 @@ class WebPerceptionAgent:
             # If we get here, all retries failed
             error_msg = f"Action failed after {max_retries} retries: {str(last_error)}"
             print(error_msg)
+            if self.progress_callback:
+                self.progress_callback(error_msg, None, None)
             return error_msg
             
         except json.JSONDecodeError:
             error_msg = "Invalid action format: Not valid JSON"
             print(error_msg)
+            if self.progress_callback:
+                self.progress_callback(error_msg, None, None)
             return error_msg
         except Exception as e:
             error_msg = f"Error executing action: {str(e)}"
             print(error_msg)
+            if self.progress_callback:
+                self.progress_callback(error_msg, None, None)
             return error_msg
     
     def _execute_single_action(self, action_data: Dict[str, Any]) -> str:
@@ -1500,9 +1524,10 @@ class WebPerceptionAgent:
                 
         return processed_tasks
     
-    def run_task(self, initial_url: str, task: str, max_steps: int = 10) -> str:
+    def run_task(self, initial_url: str, task: str, max_steps: int = 10, progress_callback=None) -> str:
         """Run a task starting from the given URL."""
         try:
+            self.progress_callback = progress_callback
             print(f"\nStarting task sequence: {task}")
             print(f"Navigating to: {initial_url}")
             
@@ -1518,27 +1543,35 @@ class WebPerceptionAgent:
                     # First try with networkidle
                     if attempt == 0:
                         print("Attempting navigation with networkidle...")
+                        self.update_status("Attempting navigation with networkidle...")
                         self.page.goto(initial_url, wait_until="networkidle", timeout=30000)
                     # Second try with domcontentloaded
                     elif attempt == 1:
                         print("Retrying with domcontentloaded...")
+                        self.update_status("Retrying with domcontentloaded...")
                         self.page.goto(initial_url, wait_until="domcontentloaded", timeout=30000)
                     # Last try with load
                     else:
                         print("Final attempt with load...")
+                        self.update_status("Final attempt with load...")
                         self.page.goto(initial_url, wait_until="load", timeout=30000)
                     
                     print("✓ Page loaded successfully")
+                    self.update_status("Page loaded successfully")
                     break
                 except Exception as nav_error:
                     print(f"Navigation attempt {attempt + 1} failed: {str(nav_error)}")
                     if attempt == max_retries - 1:
-                        return f"Failed to load page after {max_retries} attempts: {str(nav_error)}"
+                        error_msg = f"Failed to load page after {max_retries} attempts: {str(nav_error)}"
+                        if self.progress_callback:
+                            self.progress_callback(error_msg, None, "Navigation failed")
+                        return error_msg
                     time.sleep(2)  # Wait before retrying
             
             # Additional wait for page stability
             try:
                 print("Waiting for page to stabilize...")
+                self.update_status("Waiting for page to stabilize...")
                 self.page.wait_for_selector("body", timeout=5000)
                 time.sleep(2)  # Short additional wait for dynamic content
             except Exception as e:
@@ -1547,7 +1580,10 @@ class WebPerceptionAgent:
             # Execute each subtask
             results = []
             for subtask_index, subtask in enumerate(subtasks, 1):
-                print(f"\nExecuting subtask {subtask_index}/{len(subtasks)}: {subtask}")
+                subtask_msg = f"\nExecuting subtask {subtask_index}/{len(subtasks)}: {subtask}"
+                print(subtask_msg)
+                if self.progress_callback:
+                    self.progress_callback(subtask_msg, None, f"Executing subtask {subtask_index}/{len(subtasks)}")
                 
                 # Reset counters for this subtask
                 step = 0
@@ -1557,7 +1593,10 @@ class WebPerceptionAgent:
                 # Execute steps for this subtask
                 while step < steps_per_task:
                     step += 1
-                    print(f"\nSubtask {subtask_index} - Step {step}/{steps_per_task}")
+                    step_msg = f"\nSubtask {subtask_index} - Step {step}/{steps_per_task}"
+                    print(step_msg)
+                    if self.progress_callback:
+                        self.progress_callback(step_msg, None, None)
                     
                     try:
                         # Get current page state
@@ -1573,7 +1612,10 @@ class WebPerceptionAgent:
                         
                         # If no valid action, try next subtask
                         if action is None:
-                            results.append(f"Subtask {subtask_index} - Step {step}: Could not determine next action.")
+                            msg = f"Subtask {subtask_index} - Step {step}: Could not determine next action."
+                            results.append(msg)
+                            if self.progress_callback:
+                                self.progress_callback(msg, None, None)
                             break
                         
                         # Execute the action
@@ -1581,7 +1623,6 @@ class WebPerceptionAgent:
                         action_json_str = json.dumps(action)
                         result = self.execute_action(action_json_str)
                         results.append(f"Subtask {subtask_index} - Step {step}: {result}")
-                        print(f"Action result: {result}")
                         
                         # Check for successful search completion
                         if (action['action'] == 'type' and 
@@ -1589,7 +1630,10 @@ class WebPerceptionAgent:
                             'submitted' in result.lower() and 
                             not 'error' in result.lower()):
                             print("✓ Search task completed successfully")
-                            results.append(f"Subtask {subtask_index} completed successfully!")
+                            success_msg = f"Subtask {subtask_index} completed successfully!"
+                            results.append(success_msg)
+                            if self.progress_callback:
+                                self.progress_callback(success_msg, None, None)
                             break
                             
                         # Check for other successful actions
@@ -1622,19 +1666,28 @@ class WebPerceptionAgent:
                                 # If this was a scroll task and we scrolled
                                 ('scroll' in subtask.lower() and action['action'] == 'scroll')
                             ):
-                                results.append(f"Subtask {subtask_index} completed successfully!")
+                                success_msg = f"Subtask {subtask_index} completed successfully!"
+                                results.append(success_msg)
+                                if self.progress_callback:
+                                    self.progress_callback(success_msg, None, None)
                                 break
 
                         # Check for task completion from AI reasoning
                         if "task complete" in reasoning.lower():
-                            results.append(f"Subtask {subtask_index} completed successfully!")
+                            success_msg = f"Subtask {subtask_index} completed successfully!"
+                            results.append(success_msg)
+                            if self.progress_callback:
+                                self.progress_callback(success_msg, None, None)
                             break
                         
                         # Check for stuck state
                         if last_action == action:
                             consecutive_same_actions += 1
                             if consecutive_same_actions >= 3:
-                                results.append(f"Subtask {subtask_index}: Detected potential stuck state. Moving to next subtask.")
+                                stuck_msg = f"Subtask {subtask_index}: Detected potential stuck state. Moving to next subtask."
+                                results.append(stuck_msg)
+                                if self.progress_callback:
+                                    self.progress_callback(stuck_msg, None, None)
                                 break
                         else:
                             consecutive_same_actions = 0
@@ -1649,15 +1702,23 @@ class WebPerceptionAgent:
                             print(f"Warning: Page load wait timed out: {str(e)}")
                         
                     except Exception as step_error:
-                        print(f"Error in subtask {subtask_index} step {step}: {str(step_error)}")
-                        results.append(f"Subtask {subtask_index} - Step {step}: Error: {str(step_error)}")
+                        error_msg = f"Error in subtask {subtask_index} step {step}: {str(step_error)}"
+                        print(error_msg)
+                        results.append(error_msg)
+                        if self.progress_callback:
+                            self.progress_callback(error_msg, None, None)
                         continue
                 
             return "\n".join(results)
                 
         except Exception as e:
-            return f"Task execution failed: {str(e)}"
-    
+            error_msg = f"Task execution failed: {str(e)}"
+            if self.progress_callback:
+                self.progress_callback(error_msg, None, "Task failed")
+            return error_msg
+        finally:
+            self.progress_callback = None
+
     def cleanup(self):
         """Clean up browser resources."""
         try:
@@ -1688,6 +1749,9 @@ class WebAgentGradioInterface:
         self.current_task = None
         self.progress = 0
         self.status_message = ""
+        self.result_text = None  # Store Gradio components
+        self.result_gallery = None
+        self.status = None
 
     def create_interface(self):
         """Create and return the Gradio interface."""
@@ -1730,18 +1794,18 @@ class WebAgentGradioInterface:
                     stop_button = gr.Button("Stop", variant="stop")
                     
                 with gr.Column(scale=3):
-                    status = gr.Markdown("Status: Ready")
+                    self.status = gr.Markdown("Status: Ready")
                     
                     with gr.Tabs():
                         with gr.TabItem("Results"):
-                            result_text = gr.Textbox(
+                            self.result_text = gr.Textbox(
                                 label="Action Log",
                                 lines=10,
                                 max_lines=20,
                                 show_copy_button=True
                             )
                             
-                            result_gallery = gr.Gallery(
+                            self.result_gallery = gr.Gallery(
                                 label="Screenshots",
                                 columns=2,
                                 height="500px",
@@ -1765,15 +1829,36 @@ class WebAgentGradioInterface:
             run_button.click(
                 fn=self.run_agent_with_progress,
                 inputs=[url_input, task_input, max_steps, headless],
-                outputs=[result_text, result_gallery, status]
+                outputs=[self.result_text, self.result_gallery, self.status]
             )
             
             stop_button.click(
                 fn=stop_agent,
-                outputs=[status]
+                outputs=[self.status]
             )
             
         return interface
+
+    def update_ui(self, text=None, screenshots=None, status=None):
+        """Update the UI components in real-time."""
+        updates = []
+        
+        if text is not None:
+            updates.append(gr.update(value=text))
+        else:
+            updates.append(None)
+            
+        if screenshots is not None:
+            updates.append(screenshots)
+        else:
+            updates.append(None)
+            
+        if status is not None:
+            updates.append(gr.update(value=f"Status: {status}"))
+        else:
+            updates.append(None)
+            
+        return updates
 
     def run_agent_with_progress(self, url, task, max_steps, headless):
         """Run the agent with progress updates."""
@@ -1786,6 +1871,7 @@ class WebAgentGradioInterface:
         try:
             # Initialize progress
             print("Setting up agent...")
+            self.update_ui(status="Setting up agent...")
             
             # Setup agent
             if not self.agent:
@@ -1795,25 +1881,35 @@ class WebAgentGradioInterface:
             
             # Run the task
             print("Starting task...")
+            self.update_ui(status="Starting task...")
             
             # Ensure URL starts with http:// or https://
             if not url.startswith(("http://", "https://")):
                 url = "https://" + url
             
+            # Create a callback for real-time updates
+            def progress_callback(text, screenshot=None, status=None):
+                nonlocal result_text, screenshots
+                if text:
+                    result_text += text + "\n"
+                if screenshot:
+                    screenshots.append(screenshot)
+                self.update_ui(result_text, screenshots, status)
+                
             # Run the task and get results
-            result_text = self.agent.run_task(url, task, max_steps)
+            result_text = self.agent.run_task(url, task, max_steps, progress_callback)
             
             # Get final screenshot
             final_screenshot = self.agent.take_screenshot("Task complete")
             if final_screenshot:
                 screenshots.append(final_screenshot['image'])
             
-            return result_text, screenshots, gr.update(value="Status: Task completed")
+            return self.update_ui(result_text, screenshots, "Task completed")
             
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             print(error_msg)
-            return error_msg, screenshots, gr.update(value="Status: Error occurred")
+            return self.update_ui(error_msg, screenshots, "Error occurred")
         finally:
             self.is_running = False
 
@@ -1827,6 +1923,7 @@ class WebAgentGradioInterface:
     def launch(self, **kwargs):
         """Launch the Gradio interface."""
         interface = self.create_interface()
+        interface.queue()  # Enable queuing for real-time updates
         interface.launch(**kwargs)
 
 def check_system_requirements():
